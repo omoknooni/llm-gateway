@@ -21,16 +21,18 @@ Gateway(data plane)와 Admin API(control plane)를 **서드파티 proxy 제품�
 
 ## Default Technical Direction
 
-- Gateway (data plane): Python + FastAPI, 자체 구현
+- Gateway (data plane): Python + FastAPI, 자체 구현. OpenAI 호환(`/v1/chat/completions`)과
+  Anthropic Messages(`/v1/messages`) 두 방언을 모두 노출
 - Admin API (control plane): Python + FastAPI, async SQLAlchemy, Alembic
 - Admin Console: Next.js (App Router) + TypeScript, SSR 유지
 - Model backend: AWS Bedrock
 - Data layer: PostgreSQL (Amazon RDS) + Redis (Amazon ElastiCache)
-- Compute: Kubernetes (Helm chart로 배포)
+- Compute: Amazon EKS (Helm chart로 배포, 권한은 IRSA)
 - Identity source: 사내 SSO / IdP
 - Cost estimation baseline: Bedrock on-demand pricing
 
 DB와 캐시는 클러스터 내부에 상주시키지 않고 외부 매니지드 엔드포인트로 주입받습니다.
+client는 Claude 외 모델도 사용하므로, 모델 선택이 요청 방언에 묶이지 않아야 합니다.
 
 ## Working Principles
 
@@ -41,7 +43,10 @@ DB와 캐시는 클러스터 내부에 상주시키지 않고 외부 매니지�
 - **마이그레이션 소유권**: Alembic 마이그레이션의 단일 소유자는 `backend/`입니다. gateway는 같은 스키마를 읽되 정의하지 않습니다.
 - 공통 규약: 모든 엔터티 PK는 UUID, 금액은 `Decimal`(부동소수점 금지), 시간은 timezone-aware UTC.
 - 팀/사용자/Virtual Key/모델 축으로 사용량과 추정 비용이 집계되어야 합니다.
-- 장기 AWS 자격 증명을 이미지나 코드에 포함하지 않습니다.
+- 장기 AWS 자격 증명을 이미지나 코드에 포함하지 않습니다. Bedrock 권한은 IRSA로 부여하고,
+  코드는 자격 증명 획득을 기본 credential chain에 위임합니다.
+- **방언 중립**: 인증·정책 집행·사용량 이벤트 발행은 요청 방언과 무관하게 동일 경로를 지납니다.
+  방언은 파싱과 직렬화 계층에만 존재합니다.
 - 세부 기능 설계는 이 파일에 길게 적지 않고 `docs/` 하위 문서로 확장합니다.
 
 ## Branch Discipline
@@ -53,11 +58,16 @@ DB와 캐시는 클러스터 내부에 상주시키지 않고 외부 매니지�
 ## Read These Docs First
 
 - [docs/implementation-plan.md](docs/implementation-plan.md) — 구현 순서, 컴포넌트 경계, 공유 계약
-- [docs/adr-0001-self-hosted-data-plane.md](docs/adr-0001-self-hosted-data-plane.md) — 자체 구현 결정
 - [docs/virtual-key-management.md](docs/virtual-key-management.md)
 - [docs/usage-and-cost-observability.md](docs/usage-and-cost-observability.md)
 - [docs/leaderboard-and-dashboard.md](docs/leaderboard-and-dashboard.md)
 - [docs/model-evaluation-playground.md](docs/model-evaluation-playground.md)
+
+## Accepted Decisions
+
+- [ADR-0001](docs/adr-0001-self-hosted-data-plane.md): LiteLLM 의존 제거, gateway 자체 구현
+- [ADR-0002](docs/adr-0002-deployment-target-eks.md): 배포 대상은 Amazon EKS (IRSA + ALB Ingress)
+- [ADR-0003](docs/adr-0003-client-api-dialects.md): OpenAI 호환 + Anthropic Messages 동시 지원
 
 새 아키텍처 결정은 [docs/adr-template.md](docs/adr-template.md)를 사용해 ADR로 남깁니다.
 

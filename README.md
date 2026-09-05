@@ -38,10 +38,11 @@ Gateway(data plane)와 Admin API(control plane)는 서드파티 proxy 제품에 
 ```text
 Client App / Internal Service
         │  Authorization: Bearer <virtual key>
+        │  /v1/chat/completions (OpenAI)  |  /v1/messages (Anthropic)
         ▼
 ┌─────────────────────── DATA PLANE ────────────────────────┐
 │ gateway (FastAPI)                                          │
-│  Auth → AuthZ → Budget → RateLimit →                       │
+│  DialectParse → Auth → AuthZ → Budget → RateLimit →        │
 │  ModelResolve → Bedrock Invoke → Usage Finalize            │
 └──────────────┬───────────────────────────┬─────────────────┘
                │                           │ usage event
@@ -57,6 +58,8 @@ Client App / Internal Service
 
 - gateway는 backend의 HTTP API를 호출하지 않습니다. 두 plane은 DB 스키마와 Redis 키 규약으로만 만납니다.
 - gateway의 정책 조회 경로는 Redis → PostgreSQL이며, 요청 경로에서 DB 왕복이 없는 것을 목표로 합니다.
+- 두 방언은 동등하게 지원되며, 인증·집행·과금은 방언과 무관하게 같은 경로를 지납니다.
+  client가 Claude 외 모델도 쓰기 때문에 모델 선택이 요청 형식에 묶이지 않습니다.
 
 ## Repository Layout
 
@@ -77,12 +80,13 @@ llm-gateway/
 | 영역 | 선택 |
 |---|---|
 | Gateway (data plane) | Python + FastAPI (자체 구현) |
+| Client 인터페이스 | OpenAI 호환 + Anthropic Messages |
 | Admin API (control plane) | Python + FastAPI, async SQLAlchemy, Alembic |
 | Admin console | Next.js (App Router) + TypeScript, SSR |
 | Model backend | AWS Bedrock |
 | Database | PostgreSQL (Amazon RDS) |
 | Cache / Queue | Redis (Amazon ElastiCache) |
-| Compute | Kubernetes (Helm chart) |
+| Compute | Amazon EKS (Helm chart, IRSA) |
 | Infra as code | Helm + Terraform |
 | Identity | 사내 SSO / IdP |
 
@@ -107,6 +111,8 @@ llm-gateway/
 |---|---|
 | [implementation-plan.md](docs/implementation-plan.md) | 저장소 골격, 구현 순서, 브랜치 전략, 공유 계약 |
 | [adr-0001](docs/adr-0001-self-hosted-data-plane.md) | LiteLLM 의존 제거와 gateway 자체 구현 결정 |
+| [adr-0002](docs/adr-0002-deployment-target-eks.md) | 배포 대상을 Amazon EKS로 확정 |
+| [adr-0003](docs/adr-0003-client-api-dialects.md) | OpenAI 호환 + Anthropic Messages 동시 지원 |
 | [virtual-key-management.md](docs/virtual-key-management.md) | Virtual Key 수명주기와 감사 요구사항 |
 | [usage-and-cost-observability.md](docs/usage-and-cost-observability.md) | 사용량 이벤트, 집계 축, 비용 추정 |
 | [leaderboard-and-dashboard.md](docs/leaderboard-and-dashboard.md) | 대시보드 지표와 리더보드 요구사항 |

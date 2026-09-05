@@ -59,7 +59,7 @@ Admin (browser) → frontend (SSR) → backend (control plane) → PostgreSQL / 
 |---|---|---|
 | 0 | 기준선 정리 — LiteLLM 구현물 제거, 디렉터리 골격과 기준 문서 (완료) | `main` |
 | 1 | control plane 기반 — DB 스키마, Alembic, 관리자 인증, 팀/사용자/모델 카탈로그/VK CRUD | `feat/admin-backend` |
-| 2 | data plane — VK 인증, 모델 alias 라우팅, Bedrock 호출(non-stream → stream), usage 이벤트 발행 | `feat/gateway` |
+| 2 | data plane — VK 인증, 두 방언 파싱, 모델 alias 라우팅, Bedrock 호출(non-stream → stream), usage 이벤트 발행 | `feat/gateway` |
 | 3 | admin 콘솔 — 로그인, 팀/사용자/키 관리, 모델 카탈로그 화면 | `feat/admin-frontend` |
 | 4 | 집행과 관측 — rate limit·예산 집행, 사용량 집계, 대시보드/리더보드 | 각 브랜치 |
 | 5 | 배포 — Helm chart, Terraform | `main` |
@@ -79,25 +79,46 @@ Phase 1의 스키마·API 계약이 고정된 뒤 Phase 2와 3은 병렬로 진�
   각 worktree로 전파합니다. 전파는 `git merge --ff-only main` 또는 `git rebase main`을 사용합니다.
 - 통합은 각 브랜치 → `main` 방향이며, 브랜치 간 직접 병합은 하지 않습니다.
 
+## Client Interface
+
+gateway는 **OpenAI 호환과 Anthropic Messages 두 방언을 모두** 노출합니다.
+client가 Claude 외 모델도 사용하므로 한쪽 방언에 묶이지 않아야 합니다.
+근거는 [ADR-0003](adr-0003-client-api-dialects.md).
+
+- OpenAI 호환: `/v1/chat/completions`, `/v1/models`
+- Anthropic Messages: `/v1/messages`
+- 두 방언은 동등하며, 한쪽을 다른 쪽으로 변환해 내보내지 않습니다.
+- 내부 구조는 `dialect → 정규화된 내부 표현 → provider adapter`입니다. 방언 수와 provider 수가
+  곱해지지 않게 유지합니다.
+- 인증·정책 집행·사용량 이벤트 발행은 방언과 무관하게 동일 경로를 지납니다.
+  방언은 파싱과 직렬화 계층에만 존재합니다.
+- 두 방언 모두 스트리밍을 지원하고, 미지원 필드는 조용히 무시하지 않고 명시적으로 거절합니다.
+
 ## Deployment Baseline
 
-- 컴퓨팅은 Kubernetes에 배포하고, `infra/chart/`의 Helm chart가 3개 앱을 담당합니다.
+애플리케이션 배포 대상은 **Amazon EKS**입니다. 근거는 [ADR-0002](adr-0002-deployment-target-eks.md).
+
+- `infra/chart/`의 Helm chart가 3개 앱을 배포합니다. 워크로드별 ServiceAccount에 **IRSA**를 연결해
+  AWS 권한을 부여하고, Ingress는 **AWS Load Balancer Controller**를 기본 구현체로 씁니다.
+- `infra/terraform/`는 EKS 클러스터, IRSA용 IAM role과 OIDC provider, RDS, ElastiCache, ECR,
+  시크릿 저장소를 정의합니다. `infra/chart/`와 서로의 역할을 침범하지 않습니다.
 - PostgreSQL은 Amazon RDS, Redis는 Amazon ElastiCache를 사용하며 클러스터 내부에 상주시키지 않습니다.
-- 모델 호출은 Amazon Bedrock을 사용합니다.
-- 애플리케이션은 DB·캐시·모델을 모두 외부 주입 엔드포인트로 취급합니다. 접속 정보와 자격 증명은
-  환경변수/Secret으로 주입받고, 장기 자격 증명을 이미지나 코드에 포함하지 않습니다.
-- `infra/chart/`와 `infra/terraform/`는 서로의 역할을 침범하지 않습니다.
+- 모델 호출은 Amazon Bedrock을 사용하고, 접근 권한은 IRSA로 부여합니다.
+  장기 AWS 액세스 키를 이미지나 Secret에 두지 않습니다.
+- 애플리케이션 코드에는 CSP별 분기를 두지 않습니다. 자격 증명 획득은 기본 credential chain에
+  위임해, 운영(IRSA)과 로컬(개발자 AWS 프로필)이 같은 코드로 동작하게 합니다.
+- `gateway`만 공개 진입점으로 노출하고, `backend`와 `frontend`는 내부 경계 뒤에 둡니다.
+- 노드 형태(Fargate vs 관리형 노드그룹)는 미확정입니다.
 
 ## Open Decisions
 
 착수 전에 확정이 필요하지만 아직 결정되지 않은 항목입니다. 확정 시 ADR로 남깁니다.
 
-- **Kubernetes 배포 대상** — 참조 구현처럼 EKS를 전제해 IRSA·ALB Ingress Controller를 쓸지,
-  CSP 중립 chart로 두고 자격 증명 주입을 별도 설계할지.
-- **client 인터페이스 방언** — OpenAI 호환, Anthropic Messages 호환, 또는 둘 다 중 어디까지 지원할지.
 - **비용 기록 경로** — usage 이벤트를 gateway가 인라인 기록할지, 별도 worker로 분리할지.
   이벤트 발행 형식이 확정된 뒤 판단합니다.
 - **관리자 인증** — 초기 로컬 관리자 계정에서 사내 SSO/IdP로 전환하는 시점과 방식.
+- **EKS 노드 형태** — Fargate와 관리형 노드그룹 중 어느 쪽을 기본으로 둘지.
+  워크로드 특성이 드러난 뒤 정합니다.
 
 ## Out of Scope for Now
 
@@ -109,6 +130,8 @@ Phase 1의 스키마·API 계약이 고정된 뒤 Phase 2와 3은 병렬로 진�
 ## References
 
 - [ADR-0001: gateway 자체 구현](adr-0001-self-hosted-data-plane.md)
+- [ADR-0002: 배포 대상 Amazon EKS](adr-0002-deployment-target-eks.md)
+- [ADR-0003: OpenAI 호환 + Anthropic Messages 동시 지원](adr-0003-client-api-dialects.md)
 - [virtual-key-management.md](virtual-key-management.md)
 - [usage-and-cost-observability.md](usage-and-cost-observability.md)
 - [leaderboard-and-dashboard.md](leaderboard-and-dashboard.md)
