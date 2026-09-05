@@ -1,3 +1,4 @@
+# 로컬 개발용 의존 스택. 애플리케이션 서비스는 각 구현 브랜치에서 추가합니다.
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,60 +22,6 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-
-  backend:
-    build:
-      context: ./backend
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/llm_gateway}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      LOCAL_ADMIN_USERNAME: ${LOCAL_ADMIN_USERNAME:-admin}
-      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-admin123!}
-      LOCAL_ADMIN_TOKEN: ${LOCAL_ADMIN_TOKEN:-dev-admin-token}
-      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
-      LITELLM_ADMIN_URL: ${LITELLM_ADMIN_URL:-http://litellm:4000}
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master}
-      LITELLM_SYNC_ENABLED: ${LITELLM_SYNC_ENABLED:-false}
-      BEDROCK_AWS_REGION: ${BEDROCK_AWS_REGION:-us-east-1}
-      BEDROCK_MODEL_CLAUDE_SONNET_ID: ${BEDROCK_MODEL_CLAUDE_SONNET_ID:-anthropic.claude-3-5-sonnet-v2-placeholder}
-      BEDROCK_MODEL_CLAUDE_HAIKU_ID: ${BEDROCK_MODEL_CLAUDE_HAIKU_ID:-anthropic.claude-3-haiku-placeholder}
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-  frontend:
-    build:
-      context: ./frontend
-    environment:
-      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:8000}
-      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:4000}
-      NEXT_PUBLIC_LITELLM_UI_URL: ${NEXT_PUBLIC_LITELLM_UI_URL:-http://localhost:4000/ui}
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-
-  litellm:
-    build:
-      context: ./gateway
-    environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-dev-salt-key}
-      DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/llm_gateway}
-      STORE_MODEL_IN_DB: ${STORE_MODEL_IN_DB:-True}
-      AWS_REGION_NAME: ${AWS_REGION:-us-east-1}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      BEDROCK_MODEL_CLAUDE_SONNET_ID: ${BEDROCK_MODEL_CLAUDE_SONNET_ID:-anthropic.claude-3-5-sonnet-v2-placeholder}
-      BEDROCK_MODEL_CLAUDE_HAIKU_ID: ${BEDROCK_MODEL_CLAUDE_HAIKU_ID:-anthropic.claude-3-haiku-placeholder}
-    ports:
-      - "${GATEWAY_PORT:-4000}:4000"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 volumes:
   postgres_data:
