@@ -65,8 +65,10 @@ Client ──HTTP──────▶│ RequestContext   request_id 발급, �
 `BaseHTTPMiddleware`를 쓰지 않습니다. `BaseHTTPMiddleware`는 `StreamingResponse`와 조합했을 때
 스트림이 끊기는 알려진 문제가 있어, SSE가 기본인 이 서비스에서는 선택지가 아닙니다.
 
-미들웨어는 `scope["state"]` 딕셔너리로 데이터를 주고받고, `app.state`(Redis/session factory 등)는
-스택 가장 안쪽의 주입 미들웨어가 `scope["state"]`에 얹어 전달합니다.
+미들웨어는 `scope["state"]` 딕셔너리로 데이터를 주고받고, Redis·세션 팩토리 같은 프로세스 자원은
+`scope["app"].state`로 직접 읽습니다. 별도의 state 주입 미들웨어를 두지 않는 이유는 그 방식이
+등록 순서에 의존해 조용히 어긋나기 때문입니다 — `scope["app"]`은 Starlette이 미들웨어 진입 전에
+채워 줍니다.
 
 **요청 경로에서 DB 세션을 길게 잡지 않습니다.** 각 소비자가 필요한 시점에 short-lived 세션을 열고
 즉시 닫습니다. 요청 전 구간 세션을 유지하면 SSE 응답 중 커넥션이 `idle in transaction`으로 묶여
