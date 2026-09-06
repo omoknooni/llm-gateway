@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Annotated
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
@@ -65,3 +67,7 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+#: 라우터에서 쓰는 요청 스코프 세션 의존성.
+SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
