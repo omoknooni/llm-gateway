@@ -142,7 +142,11 @@ def test_stream_events_are_translated():
     assert isinstance(start, StreamStart) and start.usage.input_tokens == 4
 
     block = to_stream_event(
-        {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "t", "name": "n"}}
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "t", "name": "n"},
+        }
     )
     assert isinstance(block, ContentBlockStart) and block.tool_name == "n"
 
@@ -169,7 +173,8 @@ def test_unknown_stream_events_are_dropped_not_raised():
 
 
 def _client_error(code: str) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": "detail with arn:aws:iam::123456789012"}}, "InvokeModel")
+    detail = {"Error": {"Code": code, "Message": "detail with arn:aws:iam::123456789012"}}
+    return ClientError(detail, "InvokeModel")
 
 
 @pytest.mark.parametrize(
@@ -193,7 +198,9 @@ async def test_client_error_mapping(aws_code: str, expected: ErrorCode):
 
 async def test_access_denied_is_not_reported_as_a_client_permission_problem():
     """gateway 의 IAM 설정 문제입니다. 403 으로 주면 client 가 자기 키를 의심합니다."""
-    adapter = BedrockAdapter(Settings(), client_factory=lambda region: _RaisingClient("AccessDeniedException"))
+    adapter = BedrockAdapter(
+        Settings(), client_factory=lambda region: _RaisingClient("AccessDeniedException")
+    )
     with pytest.raises(GatewayError) as exc:
         await adapter.invoke(request(), decision(), end_user_id="u")
     assert exc.value.status == 502

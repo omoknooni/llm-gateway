@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from gateway.core.errors import ErrorCode, GatewayError
 from tests.api.conftest import UNKNOWN_KEY, auth_header, body
 
