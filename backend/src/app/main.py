@@ -13,8 +13,9 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.core.cache_invalidation import CacheInvalidationManager
 from app.core.config import get_settings
-from app.core.db import create_engine, dispose_engine
+from app.core.db import create_engine, dispose_engine, get_session_factory
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging
 from app.core.redis_client import create_redis_client
@@ -29,6 +30,8 @@ async def lifespan(app: FastAPI):
 
     create_engine()
     app.state.redis = create_redis_client()
+    # 정책 캐시는 삭제만 합니다. 값은 gateway 가 채웁니다(AGENTS.md 캐시 소유권).
+    app.state.cache_mgr = CacheInvalidationManager(app.state.redis, get_session_factory())
 
     if settings.DEV_LOGIN_ENABLED:
         logger.warning("auth.dev_login_enabled", hint="운영 환경에서는 반드시 꺼야 합니다")
