@@ -43,3 +43,7 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# 마이그레이션은 고정된 DDL 문자열을 담습니다. 줄바꿈으로 쪼개면 SQL 이 읽기 어려워집니다.
+"db/versions/*.py" = ["E501"]

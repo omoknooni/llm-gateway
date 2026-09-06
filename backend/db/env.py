@@ -39,9 +39,7 @@ def _database_url() -> str:
 
 def include_object(obj, name, type_, reflected, compare_to) -> bool:
     schema = getattr(obj, "schema", None)
-    if type_ == "table" and schema not in MANAGED_SCHEMAS:
-        return False
-    return True
+    return not (type_ == "table" and schema not in MANAGED_SCHEMAS)
 
 
 def run_migrations_offline() -> None:

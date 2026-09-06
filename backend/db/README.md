@@ -7,9 +7,10 @@ Alembic 마이그레이션과 부트스트랩 SQL. **앱 패키지와 분리**�
 db/
 ├── alembic.ini        DB URL 은 환경변수로 주입 (파일에 두지 않음)
 ├── env.py             Base.metadata 를 대상으로 autogenerate
-├── init/              스키마·확장·DB 역할·GRANT (멱등, psql 로 적용)
+├── init/              스키마·확장·DB 역할·스키마 권한 (멱등, alembic 이전)
 ├── versions/          Alembic 리비전
-├── run_migration.sh   init/*.sql → alembic upgrade head
+├── grants/            테이블 단위 권한 (alembic 이후)
+├── run_migration.sh   init/*.sql → alembic upgrade head → grants/*.sql
 └── Dockerfile         마이그레이션 Job 이미지
 ```
 

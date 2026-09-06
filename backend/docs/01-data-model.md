@@ -401,13 +401,15 @@ VK 감사 조회 API는 이 테이블을 필터링합니다(03 문서).
 |---|---|
 | `init/01_create_schemas.sql` | 스키마 5개, `pgcrypto`·`citext`·`btree_gist` 확장 |
 | `init/02_create_roles.sql` | `backend_app` / `gateway_app` 역할 생성 (비밀번호는 환경변수) |
-| `init/03_grants.sql` | 스키마별 GRANT + `ALTER DEFAULT PRIVILEGES` (이후 마이그레이션 산출물에 자동 적용) |
+| `init/03_grants.sql` | 스키마 사용 권한 + `ALTER DEFAULT PRIVILEGES` (이후 마이그레이션 산출물에 자동 적용) |
 | `versions/0001_baseline` | enum 전체, `auth`/`model`/`budget`/`audit` 테이블, 인덱스, 제약 |
 | `versions/0002_usage_tables` | `usage.usage_events`, 집계 테이블 (gateway 착수 전 확정 필요) |
 | `versions/0003_seed_bootstrap` | 기본 팀, 부트스트랩 관리자 사용자 행(`ADMIN_EMAILS` 기준) |
+| `grants/01_table_grants.sql` | 테이블 단위 권한. 대상 테이블이 있어야 하므로 Alembic 이후에 적용 |
 
-`run_migration.sh`가 `init/*.sql`을 순서대로 적용한 뒤 `alembic upgrade head`를 실행합니다.
-init SQL은 멱등해야 합니다(`IF NOT EXISTS`).
+`run_migration.sh`가 `init/*.sql` → `alembic upgrade head` → `grants/*.sql` 순으로 실행합니다.
+스키마 사용 권한과 테이블 단위 권한이 나뉘는 이유는, 전자는 테이블이 없어도 걸 수 있지만
+후자는 대상 테이블이 존재해야 하기 때문입니다. init SQL은 멱등해야 합니다(`IF NOT EXISTS`).
 
 - 마이그레이션은 **앞으로만** 갑니다. downgrade는 작성하되 운영에서 실행하지 않습니다.
 - 데이터 백필이 필요한 마이그레이션은 스키마 변경과 분리합니다.
