@@ -54,10 +54,13 @@ client는 Claude 외 모델도 사용하므로, 모델 선택이 요청 방언�
 - 각 브랜치는 자기 디렉터리(`backend/`, `frontend/`, `gateway/`)와 대응 문서만 수정합니다.
 - 공용 파일(`README.md`, `AGENTS.md`, `docs/`, `docker-compose.yml`, `infra/`)은 `main`에서 변경한 뒤 각 worktree로 전파합니다.
 - 통합은 각 브랜치 → `main` 방향이며, 브랜치 간 직접 병합은 하지 않습니다.
+- 각 브랜치는 통합 후에도 삭제하지 않습니다. 전파는 `git merge`만 쓰고 rebase는 쓰지 않습니다.
+- 절차 전문은 [docs/worktree-integration.md](docs/worktree-integration.md)에 있습니다.
 
 ## Read These Docs First
 
 - [docs/implementation-plan.md](docs/implementation-plan.md) — 구현 순서, 컴포넌트 경계, 공유 계약
+- [docs/worktree-integration.md](docs/worktree-integration.md) — worktree 통합 절차와 커밋 규율
 - [docs/virtual-key-management.md](docs/virtual-key-management.md)
 - [docs/usage-and-cost-observability.md](docs/usage-and-cost-observability.md)
 - [docs/leaderboard-and-dashboard.md](docs/leaderboard-and-dashboard.md)

@@ -92,15 +92,19 @@ llm-gateway/
 
 ## Current Status
 
-문서 기준선을 정리하고 구현을 시작하는 단계입니다. 각 컴포넌트는 별도 브랜치와 worktree에서
-구현한 뒤 `main`으로 통합합니다.
+세 컴포넌트의 1차 구현이 `main`으로 통합되었습니다. 각 컴포넌트는 별도 브랜치와 worktree에서
+구현한 뒤 `main`으로 통합하며, 통합 후에도 브랜치와 worktree를 유지합니다. 절차는
+[worktree-integration.md](docs/worktree-integration.md)에 있습니다.
 
 | 컴포넌트 | 브랜치 | 상태 |
 |---|---|---|
-| backend | `feat/admin-backend` | 착수 예정 |
-| gateway | `feat/gateway` | 착수 예정 |
-| frontend | `feat/admin-frontend` | 착수 예정 |
+| backend | `feat/admin-backend` | M1~M5 완료 (인증·팀·사용자·VK·모델 카탈로그). M6~M8 미착수 |
+| gateway | `feat/gateway` | M1~M6 완료 (VK 인증·두 방언·Bedrock/Mantle 호출·usage 기록) |
+| frontend | `feat/admin-frontend` | F0~F5 완료 (backend M1~M5 대응 화면) |
 | infra | `main` | 골격만 존재 |
+
+공통으로 남은 것은 **실 PostgreSQL·Redis·Bedrock을 붙인 통합 검증**과 Phase 4(예산·rate limit
+집행, 사용량 집계, 대시보드·리더보드)입니다. 현재 테스트는 외부 의존성 없이 도는 범위까지입니다.
 
 진행 순서, 컴포넌트 간 계약, 미확정 결정 사항은
 [implementation-plan.md](docs/implementation-plan.md)에 정의되어 있습니다.
@@ -110,6 +114,7 @@ llm-gateway/
 | 문서 | 내용 |
 |---|---|
 | [implementation-plan.md](docs/implementation-plan.md) | 저장소 골격, 구현 순서, 브랜치 전략, 공유 계약 |
+| [worktree-integration.md](docs/worktree-integration.md) | worktree 통합 절차, 커밋 규율, 계약 변경 왕복 |
 | [adr-0001](docs/adr-0001-self-hosted-data-plane.md) | LiteLLM 의존 제거와 gateway 자체 구현 결정 |
 | [adr-0002](docs/adr-0002-deployment-target-eks.md) | 배포 대상을 Amazon EKS로 확정 |
 | [adr-0003](docs/adr-0003-client-api-dialects.md) | OpenAI 호환 + Anthropic Messages 동시 지원 |

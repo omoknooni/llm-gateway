@@ -75,9 +75,14 @@ Phase 1의 스키마·API 계약이 고정된 뒤 Phase 2와 3은 병렬로 진�
 | gateway | `feat/gateway` | `../llm-gateway-worktrees/gateway` |
 
 - 각 브랜치는 자기 디렉터리와 대응 문서만 수정합니다.
+- 각 브랜치는 통합 후에도 삭제하지 않는 장기 브랜치입니다.
 - 공용 파일(`README.md`, `AGENTS.md`, `docs/`, `docker-compose.yml`, `infra/`)은 `main`에서 변경한 뒤
-  각 worktree로 전파합니다. 전파는 `git merge --ff-only main` 또는 `git rebase main`을 사용합니다.
+  각 worktree로 전파합니다. 전파는 `git merge --ff-only main`을 사용하고 **rebase는 쓰지 않습니다**
+  (근거는 [worktree-integration.md](worktree-integration.md)).
 - 통합은 각 브랜치 → `main` 방향이며, 브랜치 간 직접 병합은 하지 않습니다.
+
+커밋 규율, 통합 순서, 계약 변경 왕복 절차는 [worktree-integration.md](worktree-integration.md)에
+있습니다.
 
 ## Client Interface
 
