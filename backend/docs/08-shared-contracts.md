@@ -2,7 +2,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 상태 | **제안 (gateway 브랜치 합의 대기)** |
+| 상태 | **합의 완료 (일부 조건부).** gateway 회신과 후속 항목은 [09](09-gateway-contract-response.md) |
 | 대상 | 두 plane이 코드를 공유하지 않고 만나는 지점 전부 |
 | 상위 기준 | [AGENTS.md](../../AGENTS.md), [docs/implementation-plan.md](../../docs/implementation-plan.md) |
 
@@ -61,13 +61,30 @@ gateway는 별도 유예 로직 없이 위 조건만 봅니다.
 
 ### 정책 캐시 — gateway가 채우고, backend가 삭제만
 
-| 키 | 값 | 채움 |
+TTL은 gateway가 확정했습니다(2026-09-06 회신).
+
+| 키 | 값 | TTL | 채움 |
+|---|---|---|---|
+| `vk:auth:{key_hash}` | 인증 컨텍스트 JSON (`virtual_key_id`, `owner_type`, `owner_id`, `team_id`, `user_id`, `status`, `expires_at`, `allowed_model_aliases`, `idp_subject`) | 300s | gateway |
+| `policy:model:{alias}` | 모델 해석 + 현재 단가 (`pricing_id` 포함) | 300s | gateway |
+| `policy:allowed_models:{scope}:{id}` | `scope ∈ {team, user}` | 300s | gateway |
+| `policy:budget:{scope}:{id}` | 예산 설정(한도, 정책, 임계값) | 300s | gateway |
+| `policy:ratelimit:{scope}:{id}:{model_alias\|*}` | rate limit 설정 | 300s | gateway |
+
+- `allowed_model_aliases`는 3층 해석이 끝난 **최종 목록**입니다. "전체 허용"(`None`)을 캐시에 넣지
+  않습니다. 빈 목록은 "이 키로 쓸 수 있는 모델 없음"이라는 유효한 상태입니다.
+- `idp_subject`는 C2 원안에 없던 필드입니다. gateway가 provider metadata로 전달합니다
+  ([09](09-gateway-contract-response.md) Q4에 확인 대기 항목).
+
+### gateway 전용 캐시 — backend는 존재를 알되 건드리지 않음
+
+| 키 | 값 | TTL |
 |---|---|---|
-| `vk:auth:{key_hash}` | 인증 컨텍스트 JSON (`virtual_key_id`, `owner_type`, `owner_id`, `team_id`, `user_id`, `status`, `expires_at`, `allowed_model_aliases`) | gateway |
-| `policy:model:{alias}` | 모델 해석 + 현재 단가 | gateway |
-| `policy:allowed_models:{scope}:{id}` | `scope ∈ {team, user}` | gateway |
-| `policy:budget:{scope}:{id}` | 예산 설정(한도, 정책, 임계값) | gateway |
-| `policy:ratelimit:{scope}:{id}:{model_alias\|*}` | rate limit 설정 | gateway |
+| `vk:miss:{key_hash}` | 미등록 키의 음성 캐시. DB 재조회 억제 | 30s |
+| `policy:model:list` | 활성 alias 목록 (`/v1/models` 응답 재료) | 60s |
+
+`policy:model:list`를 낡게 만드는 주체는 backend(카탈로그 변경)입니다. 무효화 주체를 어디에 둘지는
+[09](09-gateway-contract-response.md) Q1에서 확인 중입니다.
 
 ### 집행 카운터 — gateway 전용. backend는 읽기만
 
@@ -156,7 +173,13 @@ VK 층의 0개는 *축소 없음*입니다.
 - `dialect`를 값으로 기록합니다. 집계는 방언 중립이어야 하지만, 방언별 분해도 가능해야 합니다.
 - 토큰 수는 provider 응답값을 우선 쓰고, 없어서 추정한 경우 `estimated_usage=true`로 표시합니다.
 - `estimated_cost_usd`는 기록 시점 단가로 계산하고, 어떤 단가를 썼는지 `pricing_id`로 남깁니다.
-- 429(rate limit 거절)는 기록하지 않습니다. Bedrock 호출이 없었기 때문입니다.
+- **정책 거절(401 / 403 / 429)은 `usage_events`에 기록하지 않습니다.** provider 호출이 없었으므로
+  비용도 토큰도 없고, 집계 테이블에 0 행을 대량으로 만들면 대시보드 쿼리가 전부 이를 걸러내야 합니다.
+  대신 `usage.auth_events`(신설 예정, [09](09-gateway-contract-response.md) S4)로 갑니다.
+  즉 실패의 기록 위치는 둘입니다 — provider를 부른 실패는 `usage_events`, 정책이 막은 거절은 `auth_events`.
+- **기록 경로 확정**: gateway가 응답 반환 후 백그라운드로 직접 INSERT하고, 실패 시 메모리 스풀에
+  넣어 재시도합니다(`ON CONFLICT (request_id) DO NOTHING`). 별도 worker를 두지 않습니다.
+- `client` 컬럼은 신설 예정입니다([09](09-gateway-contract-response.md) S3).
 
 ## C6. 오류 코드
 
@@ -174,13 +197,15 @@ gateway가 각 방언의 오류 형식으로 변환하더라도, 내부 구분�
 
 ## 합의 체크리스트
 
-gateway 브랜치가 아래를 확인·확정하면 M0이 종료됩니다.
+gateway 브랜치 회신 완료(2026-09-06). 상세와 후속 항목은 [09](09-gateway-contract-response.md).
 
-- [ ] C1 키 포맷과 `key_hash` 산출식
-- [ ] C1 인증 통과 조건과 상태 전이
-- [ ] C2 캐시 키 이름과 TTL 상한
-- [ ] C2 집행 카운터 키 이름
-- [ ] C3 세 해석 규칙 (허용 모델 / 예산 / rate limit)
-- [ ] C4 DB 역할과 권한 범위
-- [ ] C5 usage 이벤트 컬럼
-- [ ] C6 내부 오류 코드
+- [x] C1 키 포맷과 `key_hash` 산출식
+- [x] C1 인증 통과 조건과 상태 전이
+- [x] C2 캐시 키 이름과 TTL 상한 — 정책 캐시 300s 확정, gateway 전용 키 2종 추가
+- [~] C2 집행 카운터 키 이름 — **조건부.** cluster mode hash tag 필요 여부는 Phase 4에서 확정
+- [x] C3 세 해석 규칙 (허용 모델 / 예산 / rate limit)
+- [x] C4 DB 역할과 권한 범위 — `usage.auth_events` INSERT GRANT 추가 필요
+- [x] C5 usage 이벤트 컬럼 — 정책 거절은 `auth_events` 분리, `client` 컬럼 추가
+- [x] C6 내부 오류 코드
+
+**미완결 항목**: 스키마 변경 S1~S4 반영, Q1~Q5 확인.
