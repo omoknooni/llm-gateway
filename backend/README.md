@@ -21,6 +21,7 @@ backend/
 │   ├── services/        도메인 규칙, 트랜잭션 경계
 │   ├── routers/         HTTP 계층
 │   └── jobs/            주기 작업
+│   └── policy/          gateway 와 공유하는 판정 규칙 (순수 함수)
 ├── db/                  마이그레이션 컴포넌트 (앱과 분리)
 └── tests/
 ```
@@ -43,6 +44,9 @@ MIGRATION_DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/ll
 
 # 앱 실행
 PYTHONPATH=src .venv/bin/uvicorn app.main:app --reload --port 8080
+
+# 주기 작업 (별도 프로세스. 만료 키 정리, 캐시 재시도, 단가 누락 점검)
+PYTHONPATH=src .venv/bin/python -m app.jobs.main
 ```
 
 - OpenAPI 문서: <http://localhost:8080/docs> — 이 문서가 frontend와의 계약 원천입니다.
