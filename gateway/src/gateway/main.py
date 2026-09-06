@@ -23,11 +23,15 @@ from fastapi.responses import JSONResponse
 
 from gateway.api import health
 from gateway.config import get_settings
+from gateway.core.tasks import BackgroundTasks
 from gateway.db import create_engine, create_session_factory
 from gateway.logging import configure_logging
+from gateway.middleware.auth import AuthMiddleware
 from gateway.middleware.client_id import ClientIdentificationMiddleware
 from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.redis_client import create_redis
+from gateway.services.auth_service import AuthService
+from gateway.services.last_used import LastUsedTracker
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +48,9 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis
     app.state.engine = engine
     app.state.session_factory = create_session_factory(engine)
+    app.state.background = BackgroundTasks()
+    app.state.auth_service = AuthService(settings)
+    app.state.last_used = LastUsedTracker(settings.last_used_throttle_seconds)
 
     # 기동 시 의존성 연결을 확인하지 **않습니다.** Redis 나 DB 가 늦게 뜨는 상황에서 pod 가
     # 기동 실패로 재시작을 반복하면 복구가 더 느려집니다. 준비 여부는 /readyz 가 답합니다.
@@ -52,6 +59,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("gateway.shutting_down")
+        # 진행 중인 기록(사용량, last_used_at)에 마지막 기회를 준 뒤 연결을 닫습니다.
+        await app.state.background.drain()
         await redis.aclose()
         await engine.dispose()
 
@@ -68,6 +77,7 @@ def create_app() -> FastAPI:
     )
 
     # 등록 순서는 실행 순서의 역순입니다(마지막 등록 = 가장 바깥).
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(ClientIdentificationMiddleware)
     app.add_middleware(RequestContextMiddleware)  # 가장 바깥 = 가장 먼저 실행
 

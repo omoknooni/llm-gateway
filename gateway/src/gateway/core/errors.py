@@ -10,6 +10,23 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class AuthOutcome(StrEnum):
+    """`usage.auth_events.outcome` 의 값 집합 (공유 계약, docs/06 S4).
+
+    `outcome` 컬럼은 enum 이 아니라 text 입니다 — 값이 늘 때마다 backend 마이그레이션을 기다리면
+    "내용은 gateway 가 결정한다"(C5)가 뒤집히기 때문입니다. 대신 값 집합을 여기서 고정합니다.
+    """
+
+    INVALID_KEY = "INVALID_KEY"
+    REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
+    OWNER_INACTIVE = "OWNER_INACTIVE"
+    MODEL_NOT_ALLOWED = "MODEL_NOT_ALLOWED"
+    MODEL_INACTIVE = "MODEL_INACTIVE"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    RATE_LIMITED = "RATE_LIMITED"
+
+
 class ErrorCode(StrEnum):
     INVALID_VIRTUAL_KEY = "invalid_virtual_key"
     MODEL_NOT_ALLOWED = "model_not_allowed"
@@ -55,12 +72,16 @@ class GatewayError(Exception):
         *,
         retry_after: int | None = None,
         param: str | None = None,
+        outcome: AuthOutcome | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.retry_after = retry_after
         self.param = param
+        #: 값이 있으면 `usage.auth_events` 에 기록될 거절입니다. None 이면 기록하지 않습니다
+        #: (요청 자체가 잘못됐거나 의존성 장애 — docs/01 의 기록 위치 표).
+        self.outcome = outcome
 
     @property
     def status(self) -> int:

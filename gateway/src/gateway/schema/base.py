@@ -12,6 +12,21 @@ import enum
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import DeclarativeBase
 
+# 방언은 도메인 개념이라 core 가 정의합니다. 여기서는 그 값으로 PostgreSQL enum 을 가리키기만
+# 합니다 — 정의가 둘로 갈리면 집계 값이 어긋납니다.
+from gateway.core.dialect import ApiDialect
+
+__all__ = [
+    "ApiDialect",
+    "Base",
+    "ModelStatus",
+    "Provider",
+    "UsageStatus",
+    "VKOwnerType",
+    "VKStatus",
+    "pg_enum",
+]
+
 
 class Base(DeclarativeBase):
     pass
@@ -33,11 +48,6 @@ class Provider(enum.StrEnum):
     BEDROCK = "BEDROCK"
     #: S1 로 추가된 값. 전송 방식(HTTPS + bearer)과 IAM 네임스페이스(bedrock-mantle:)가 다릅니다.
     BEDROCK_MANTLE = "BEDROCK_MANTLE"
-
-
-class ApiDialect(enum.StrEnum):
-    OPENAI_CHAT = "OPENAI_CHAT"
-    ANTHROPIC_MESSAGES = "ANTHROPIC_MESSAGES"
 
 
 class ModelStatus(enum.StrEnum):
