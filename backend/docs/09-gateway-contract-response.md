@@ -2,9 +2,9 @@
 
 | 항목 | 값 |
 |---|---|
-| 상태 | **backend 회신 (초안). Q1~Q5는 gateway 확인 대기** |
+| 상태 | **양방향 확정.** S1~S4 마이그레이션 반영 완료(`0004`·`0005`), Q1~Q5 회신 수령 |
 | 대상 | [08-shared-contracts.md](08-shared-contracts.md) 합의 결과 수용, gateway의 스키마 변경 요청 S1~S4 처리 |
-| 출처 | `feat/gateway` worktree의 `gateway/docs/` (2026-09-06 시점, 미커밋 문서 6건) |
+| 출처 | `feat/gateway` worktree의 `gateway/docs/` — 요청은 `README.md`, Q1~Q5 회신은 `06-contract-response.md` |
 
 ## 이 문서의 목적
 
@@ -238,7 +238,9 @@ usage.auth_events
 
 ## backend가 gateway에 되묻는 항목
 
-아래는 회신 문서만으로 확정되지 않은 지점입니다. gateway 브랜치의 답이 필요합니다.
+아래는 첫 회신만으로 확정되지 않아 backend가 되물은 지점입니다.
+**답은 모두 받았습니다 — 결과는 [Q1~Q5 회신 결과](#q1q5-회신-결과)에 있습니다.**
+질문 자체를 남겨 두는 이유는, 결론만 보면 왜 그렇게 정해졌는지 알 수 없기 때문입니다.
 
 ### Q1. `policy:model:list` 무효화 주체
 
@@ -294,20 +296,123 @@ usage 기록 실패가 스풀 한도를 넘어 드롭되면 **비용이 과소 �
 
 backend는 (a)를 선호하지만 테이블이 하나 더 늘어납니다. Phase 4에서 정해도 됩니다.
 
+## Q1~Q5 회신 결과
+
+gateway가 [06-contract-response.md]로 답했습니다. 다섯 건 모두 정리됐고, **Q4는 gateway가
+설계를 바꿔 backend 쪽 조치가 사라졌습니다.**
+
+### Q1 — `policy:model:list` 무효화 주체 → **(a) 공유 키로 이동**
+
+backend가 `policy:model:{alias}`를 지우는 자리마다 함께 지웁니다. gateway가 두 가지를 덧붙였고
+둘 다 반영했습니다.
+
+- **트리거는 상태 전환만이 아닙니다.** 목록 항목이 `supported_dialects`·`max_output_tokens`를
+  싣고 있어, 생성·수정·상태 전환 전부에서 지워야 합니다. → `ModelService._policy_keys()`가
+  두 키를 항상 함께 돌려주고, 네 곳(생성·수정·상태 전환·단가 등록)이 모두 이를 씁니다.
+- **카탈로그 변경 시 전 VK 캐시를 팬아웃 삭제하지 않습니다.** 이미 굳어진 `vk:auth` 스냅샷은
+  TTL(300초)까지 옛 허용 목록을 들고 있고 그게 정상입니다. 새 모델 접근이 최대 300초 늦게 열릴
+  뿐이고, 반대 방향(INACTIVE)은 gateway의 `ScopeCheck`가 모델 상태를 다시 봐서 잡습니다.
+  → backend는 이 팬아웃을 **구현하지 않습니다.** (안 하는 것이 결정입니다)
+
+부수 효과로 이 키의 TTL이 60초 → 300초가 됐습니다. 짧게 잡았던 이유가 "아무도 무효화해 주지
+않아서"였고, (a)가 그 이유를 없앴습니다.
+
+### Q2 — `client`를 집계 축에 넣을지 → **넣지 않음**
+
+요구 문서([usage-and-cost-observability.md](../../docs/usage-and-cost-observability.md),
+[leaderboard-and-dashboard.md](../../docs/leaderboard-and-dashboard.md))의 집계 축과 drill-down에
+client가 없다는 지적이 맞습니다. 요구가 아니라 가능성 때문에 주 집계 테이블의 PK를 바꿀 이유가
+없습니다. S3는 **원천 컬럼으로만** 둡니다.
+
+나중에 필요해지면 주 집계를 건드리는 대신 저차원 테이블을 따로 둡니다.
+
+```text
+usage.daily_client_usage   PK (bucket_date, team_id, client)
+    request_count, input_tokens, output_tokens, estimated_cost_usd
+```
+
+M7에서 필요성이 확인되면 만듭니다. → **미결정 목록에 유지**
+
+### Q3 — 등록 client 집합의 소유 위치 → **계약 문서로 고정**
+
+backend가 제안한 "데이터에서 distinct"는 철회합니다. S3에서 `client` 인덱스를 만들지 않기로
+했으므로 그 조회가 `usage_events` 전체 스캔이 되고, 콘솔 필터를 열 때마다 돕니다. 지적이 맞습니다.
+
+값 집합은 `auth_events.outcome`·C6 오류 코드와 같은 방식으로 문서에 고정합니다.
+
+| 값 | 대상 |
+|---|---|
+| `claude-code` | Claude Code CLI |
+| `claude-desktop` | Claude 데스크톱 앱 계열 |
+| `codex` | OpenAI Codex CLI |
+| `openai-sdk` | OpenAI 공식 SDK (python / node) |
+| `other` | 분류되지 않음 (예약어) |
+
+원본은 gateway `03-client-identification.md`이고, 값 추가·삭제는 gateway 설정 변경과 그 표의
+갱신이 한 쌍으로 움직입니다. 콘솔은 이 목록으로 필터를 그리고 데이터에 없는 값은 0건으로 표시합니다.
+
+### Q4 — `idp_subject`를 provider metadata로 전달 → **gateway가 철회**
+
+정책 검토를 기다리지 않고 gateway가 설계를 바꿨습니다. provider가 `metadata.user_id`에 요구하는
+것은 불투명한 식별자인데, OIDC `sub`는 IdP 설정에 따라 이메일·사번이 그대로 들어올 수 있고
+사내 IdP가 미확정이라 **그 값이 불투명할지 지금 알 수 없다**는 판단입니다.
+
+대체 값은 `user_id`(TEAM 소유 키는 `virtual_key_id`)입니다. VK id는 로테이션 때 바뀌어 provider
+측 남용 탐지의 연속성이 끊기므로, 사람에 붙는 id가 이 목적에 맞습니다.
+
+backend 파급: **`vk:auth` payload가 08 문서 원안과 정확히 같아졌습니다.** Redis 캐시가 더 이상
+개인식별정보의 사본이 아닙니다. → 08 문서에서 `idp_subject` 관련 기술을 제거했습니다.
+
+### Q5 — 스풀 드롭 지표의 노출 경로 → **(b) 배제, 형태는 Phase 4**
+
+backend가 Prometheus를 직접 조회하는 (b)는 배제합니다. control plane에 관측 스택 의존이
+들어오고, 두 plane을 DB·Redis 규약으로만 만나게 해 온 원칙과 어긋납니다.
+
+(a) 방향에 합의하되 형태는 일 단위 카운터가 아니라 **사건 단위 행**입니다. 드롭은 DB가 죽어 있는
+동안 발생하므로 그 시점에는 아무것도 쓸 수 없고, DB가 돌아온 뒤 사건당 한 행을 넣습니다.
+
+```text
+usage.ingest_gaps
+  id, gap_start, gap_end, dropped_count, recorded_at
+```
+
+정상 운영에서는 0건이고, 대시보드는 그 구간에 "이 기간 집계는 불완전함" 배너를 띄웁니다.
+**확정은 Phase 4**로 미룹니다(`verify_budget_counters`와 함께 설계). 지금 고정된 것은
+(b)를 쓰지 않는다는 것뿐입니다. → **미결정 목록에 유지**
+
+### 회신에서 함께 정해진 것
+
+- **`auth_events` 조회는 `SUM(occurrence_count)`.** gateway의 묶음 창은 프로세스 로컬이라
+  pod가 N개면 같은 시각·같은 출처의 실패가 최대 N행으로 나뉩니다. 행 수로 세면 pod 수만큼
+  과소 계상됩니다. M7 조회 API에서 지켜야 합니다.
+- **묶음 키는 `(outcome, key_hash_prefix, source_ip, client)`, 창은 60초**, `request_id`는 창의
+  **첫** 요청 id(그 요청의 로그가 원인을 담고 있어 조사 진입점이 됨).
+- **`outcome` 값 집합은 09의 표와 정확히 일치합니다.** gateway가 초안에 있던
+  `dialect_not_supported`를 철회했습니다 — 정책 거절이 아니라 잘못된 엔드포인트로 보낸 요청이고,
+  "요청 자체가 잘못된 것은 기록하지 않는다"는 원칙과 어긋난다는 이유입니다.
+- **S2의 CHECK는 이중 방어입니다.** gateway도 `provider = BEDROCK_MANTLE AND endpoint_url IS NULL`
+  이면 해석 실패로 처리해 `model_inactive`(404)를 반환합니다. 제약은 새 행만 막고, 제약 도입
+  이전 행이나 직접 SQL로 넣은 행은 막지 못하기 때문입니다.
+
 ## backend 작업 목록
 
-| # | 작업 | 대상 | 선행 조건 |
-|---|---|---|---|
-| 1 | 마이그레이션 `0004` — S1 enum 값 추가 | `db/versions/` | 없음 |
-| 2 | 마이그레이션 `0005` — S2 컬럼 + CHECK, S3 컬럼, S4 테이블 | `db/versions/` | 1 (enum 값과 사용 분리) |
-| 3 | `gateway_app` INSERT / `backend_app` SELECT GRANT (`usage.auth_events`) | `db/grants/01_table_grants.sql` | 2 |
-| 4 | ORM 모델 반영 (`Provider`, `ModelAlias.endpoint_url`, `UsageEvent.client`, `AuthEvent`) | `src/app/models/` | 2 |
-| 5 | 모델 API에 `endpoint_url` 추가 + https 검증 | `schemas/models.py`, `services/model_service.py` | 4 |
-| 6 | Q1 확정 시 `cache_keys.model_list()` 추가 및 카탈로그 변경 시 DEL | `core/cache_keys.py`, `services/model_service.py` | Q1 |
-| 7 | `auth_events` 조회 API (VK 감사 화면 결합) | `routers/virtual_keys.py` | M7 |
-| 8 | 문서 갱신 — 01(스키마), 03(감사), 05(집계 정의), 08(계약 확정) | `docs/` | 2 |
+| # | 작업 | 상태 |
+|---|---|---|
+| 1 | 마이그레이션 `0004` — S1 enum 값 추가 | **완료** |
+| 2 | 마이그레이션 `0005` — S2 컬럼 + CHECK, S3 컬럼, S4 테이블 | **완료** |
+| 3 | `gateway_app` INSERT / `backend_app` SELECT GRANT (`usage.auth_events`) | **완료** (`db/grants/` + `0005`) |
+| 4 | ORM 모델 반영 (`Provider`, `ModelAlias.endpoint_url`, `UsageEvent.client`, `AuthEvent`) | **완료** |
+| 5 | 모델 API에 `endpoint_url` 추가 + https 검증 + Mantle 필수 검증 | **완료** |
+| 6 | `cache_keys.model_list()` 추가, 카탈로그 변경 4곳에서 함께 DEL (Q1) | **완료** |
+| 7 | `auth_events` 조회 API — 행 수가 아니라 `SUM(occurrence_count)` | M7 |
+| 8 | 문서 갱신 — 01(스키마), 03(감사), 04(카탈로그), 08(계약) | **완료** |
+| 9 | `usage.daily_client_usage` 신설 여부 (Q2 후속) | M7에서 판단 |
+| 10 | `usage.ingest_gaps` 최종 형태 (Q5) | Phase 4에서 판단 |
 
-1~5는 gateway M5 착수 전까지 들어가면 됩니다. 6은 Q1 답변에 달려 있고, 7은 M7 범위입니다.
+**`0004`와 `0005`를 나눈 이유**: PostgreSQL은 `ALTER TYPE ... ADD VALUE`로 추가한 enum 값을
+같은 트랜잭션에서 쓰지 못합니다. S2의 CHECK가 `'BEDROCK_MANTLE'` 리터럴을 쓰므로 두 리비전이
+한 트랜잭션에 묶이면 upgrade가 실패합니다. `env.py`에 `transaction_per_migration=True`를 켜
+online·offline 양쪽 모두 리비전마다 트랜잭션이 나뉘게 했습니다. PostgreSQL 12 이상이 필요합니다.
 
 ## 상위 문서에 반영해야 할 것
 

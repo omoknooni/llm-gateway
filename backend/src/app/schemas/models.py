@@ -3,10 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.models.enums import ApiDialect, ModelStatus, Provider
 from app.policy.allowed_models import ResolvedFrom
+
+
+def _require_https(value: str | None) -> str | None:
+    """평문 HTTP 로 모델 호출이 나가지 않게 합니다."""
+    if value is not None and not value.startswith("https://"):
+        raise ValueError("endpoint_url 은 https:// 로 시작해야 합니다")
+    return value
 
 
 class PricingCreateRequest(BaseModel):
@@ -47,6 +54,8 @@ class ModelCreateRequest(BaseModel):
     provider: Provider = Provider.BEDROCK
     provider_model_id: str = Field(min_length=1, max_length=512)
     region: str | None = None
+    #: Mantle 계열은 필수입니다. 없으면 등록을 거절합니다(DB CHECK 와 이중 방어).
+    endpoint_url: str | None = Field(default=None, max_length=1024)
     supported_dialects: list[ApiDialect] = Field(min_length=1)
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
@@ -55,11 +64,14 @@ class ModelCreateRequest(BaseModel):
     #: 단가 없이 ACTIVE 가 되면 비용이 0 으로 집계되어 관제 목적을 무너뜨립니다.
     pricing: PricingCreateRequest
 
+    _validate_endpoint = field_validator("endpoint_url")(_require_https)
+
 
 class ModelUpdateRequest(BaseModel):
     display_name: str | None = None
     provider_model_id: str | None = Field(default=None, min_length=1, max_length=512)
     region: str | None = None
+    endpoint_url: str | None = Field(default=None, max_length=1024)
     supported_dialects: list[ApiDialect] | None = Field(default=None, min_length=1)
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
@@ -77,6 +89,7 @@ class ModelResponse(BaseModel):
     provider: Provider
     provider_model_id: str
     region: str | None
+    endpoint_url: str | None
     supported_dialects: list[ApiDialect]
     status: ModelStatus
     max_input_tokens: int | None

@@ -236,8 +236,18 @@ VK 관련 감사는 `audit.audit_logs`에 `resource_type='virtual_key'`로 남�
 ### 인증 이벤트는 여기 없습니다
 
 "어떤 키가 어떤 모델을 언제 호출했는가"와 인증 실패 이력은 **data plane의 기록**입니다.
-`usage.usage_events`(성공/실패 포함)가 원천이고, backend는 조회 API만 제공합니다.
 control plane 감사 로그에 인증 이벤트를 섞으면 저 QPS 테이블에 고 QPS 쓰기가 들어옵니다.
+
+기록 위치는 둘로 나뉩니다.
+
+| 사건 | 테이블 |
+|---|---|
+| provider 호출이 일어난 요청 (성공·실패 모두) | `usage.usage_events` |
+| 정책이 막은 거절 (401/403/429) | `usage.auth_events` |
+
+`auth_events`는 gateway가 동일 출처의 연속 실패를 60초 창으로 묶어 한 행씩 기록합니다.
+창이 프로세스 로컬이라 pod 수만큼 행이 나뉘므로, **조회는 행 수가 아니라 `SUM(occurrence_count)`**
+를 씁니다. backend는 조회 API만 제공합니다(M7).
 
 ## Background Jobs
 

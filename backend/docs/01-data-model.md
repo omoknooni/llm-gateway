@@ -41,7 +41,7 @@ PostgreSQL 스키마를 도메인별로 나눕니다. **plane별 최소 권한 G
 | `auth` | 팀, 사용자, Virtual Key | CRUD | SELECT + `virtual_keys.last_used_at` UPDATE |
 | `model` | 모델 alias, 단가, 허용 모델, rate limit 설정 | CRUD | SELECT |
 | `budget` | 예산 설정, 기간별 소진 | CRUD | SELECT + `budget_usages` UPSERT |
-| `usage` | 사용량 원천 이벤트, 집계 | SELECT (+집계 작업의 집계 테이블 쓰기) | INSERT |
+| `usage` | 사용량 원천 이벤트, 정책 거절 이벤트, 집계 | SELECT (+집계 작업의 집계 테이블 쓰기) | `usage_events`·`auth_events` INSERT |
 | `audit` | control plane 감사 로그, 캐시 무효화 실패 | CRUD | 접근 없음 |
 
 DB 역할은 두 개입니다. `backend_app`, `gateway_app`. 각각 위 표대로만 GRANT하고,
@@ -54,7 +54,7 @@ DB 역할은 두 개입니다. `backend_app`, `gateway_app`. 각각 위 표대�
 | `auth.user_role` | `ADMIN`, `TEAM_LEADER`, `MEMBER` |
 | `auth.vk_owner_type` | `TEAM`, `USER` |
 | `auth.vk_status` | `ACTIVE`, `ROTATED`, `REVOKED`, `EXPIRED` |
-| `model.provider` | `BEDROCK` |
+| `model.provider` | `BEDROCK`, `BEDROCK_MANTLE` |
 | `model.api_dialect` | `OPENAI_CHAT`, `ANTHROPIC_MESSAGES` |
 | `model.model_status` | `ACTIVE`, `INACTIVE` |
 | `model.rate_limit_scope` | `GLOBAL`, `TEAM`, `USER`, `VIRTUAL_KEY` |
@@ -198,6 +198,7 @@ VK 단위 허용 모델 축소. 행이 없으면 소유자 정책을 그대로 �
 | `provider` | `model.provider` NOT NULL | |
 | `provider_model_id` | text NOT NULL | Bedrock model id 또는 inference profile ARN |
 | `region` | text NULL | 미지정 시 배포 기본 리전 |
+| `endpoint_url` | text NULL | Mantle 계열 전용. `provider='BEDROCK_MANTLE'`이면 NOT NULL (CHECK) |
 | `supported_dialects` | `model.api_dialect[]` NOT NULL | ADR-0003. 모델별로 노출 방언이 다를 수 있음 |
 | `status` | `model.model_status` NOT NULL DEFAULT `ACTIVE` | |
 | `max_input_tokens` / `max_output_tokens` | int NULL | 검증·표시용 |
@@ -331,11 +332,36 @@ alias이기 때문입니다. alias 변경은 지원하지 않고 새 alias 생�
 | `estimated_cost_usd` | numeric(14,6) NOT NULL DEFAULT 0 | 기록 시점 단가로 계산 |
 | `pricing_id` | uuid NULL FK → `model.model_pricings.id` | 어떤 단가를 썼는지 추적 |
 | `error_code` | text NULL | |
+| `client` | text NULL | 요청 도구. 인가 신호가 아니라 관측 라벨(위조 가능한 헤더에서 옴) |
 
 - 인덱스: `(occurred_at)`, `(team_id, occurred_at)`, `(user_id, occurred_at)`,
   `(virtual_key_id, occurred_at)`, `(model_alias, occurred_at)`.
 - 월 단위 range 파티셔닝을 전제로 설계합니다(보존 정책과 대량 삭제를 위해).
   실제 파티션 도입 시점은 07 문서의 미결정 항목입니다.
+
+### usage.auth_events **[공유, gateway가 INSERT]**
+
+정책 거절(401/403/429)의 기록 자리입니다. provider 호출이 없었으므로 `usage_events`에
+토큰·비용이 0인 행을 대량으로 만들지 않습니다.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `occurred_at` / `first_occurred_at` | timestamptz NOT NULL | 묶음 창의 마지막/첫 실패 시각 |
+| `occurrence_count` | int NOT NULL DEFAULT 1 | 창 안의 실패 수 |
+| `outcome` | text NOT NULL | 거절 사유. enum이 아닙니다(값 소유자가 gateway) |
+| `virtual_key_id` | uuid NULL FK | 키가 식별된 경우에만 |
+| `key_hash_prefix` | char(8) NULL | `sha256(원문)`의 앞 8자. **`key_prefix`와 다른 값** |
+| `team_id` / `user_id` | uuid NULL FK | |
+| `client` | text NULL | |
+| `model_alias` | text NULL | 카탈로그에 없는 alias 로 거절될 수 있어 **FK 없음** |
+| `source_ip` | inet NULL | |
+| `request_id` | text NOT NULL | 창의 **첫** 요청 id |
+
+- 인덱스: `(occurred_at)`, `(virtual_key_id, occurred_at)`, `(key_hash_prefix, occurred_at)`.
+- gateway가 동일 출처의 연속 실패를 60초 창으로 묶어 한 행으로 기록합니다. 창이 프로세스
+  로컬이라 pod 수만큼 행이 나뉘므로, **조회는 행 수가 아니라 `SUM(occurrence_count)`** 를 씁니다.
+- 이 테이블과 `usage_events`의 파티셔닝·보존 기간은 하나의 결정으로 묶습니다(07 미결정 #3).
 
 ### usage.daily_usage_aggregates / usage.monthly_usage_aggregates
 
@@ -405,7 +431,13 @@ VK 감사 조회 API는 이 테이블을 필터링합니다(03 문서).
 | `versions/0001_baseline` | enum 전체, `auth`/`model`/`budget`/`audit` 테이블, 인덱스, 제약 |
 | `versions/0002_usage_tables` | `usage.usage_events`, 집계 테이블 (gateway 착수 전 확정 필요) |
 | `versions/0003_seed_bootstrap` | 기본 팀, 부트스트랩 관리자 사용자 행(`ADMIN_EMAILS` 기준) |
+| `versions/0004_add_mantle_provider` | S1 — `model.provider`에 `BEDROCK_MANTLE` 추가 |
+| `versions/0005_gateway_schema_requests` | S2 `endpoint_url`+CHECK, S3 `usage_events.client`, S4 `usage.auth_events` |
 | `grants/01_table_grants.sql` | 테이블 단위 권한. 대상 테이블이 있어야 하므로 Alembic 이후에 적용 |
+
+`0004`와 `0005`가 나뉜 이유는 PostgreSQL이 `ALTER TYPE ... ADD VALUE`로 추가한 enum 값을
+같은 트랜잭션에서 쓰지 못하기 때문입니다. `env.py`의 `transaction_per_migration=True`가
+리비전마다 트랜잭션을 나눕니다(PostgreSQL 12 이상 필요).
 
 `run_migration.sh`가 `init/*.sql` → `alembic upgrade head` → `grants/*.sql` 순으로 실행합니다.
 스키마 사용 권한과 테이블 단위 권한이 나뉘는 이유는, 전자는 테이블이 없어도 걸 수 있지만

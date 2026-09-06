@@ -37,6 +37,25 @@ ADR-0003에 따라 gateway는 OpenAI 호환과 Anthropic Messages 두 방언을 
 이 컬럼은 카탈로그의 속성이지 방언 구현이 아닙니다. backend는 값을 관리만 하고,
 거절 판정은 gateway가 합니다.
 
+## Provider와 엔드포인트
+
+`provider`는 **권한 경계**를 나눕니다. `BEDROCK`과 `BEDROCK_MANTLE`은 전송 방식(SDK vs HTTPS+bearer)도
+다르지만, 더 중요하게는 IAM 네임스페이스가 다릅니다(`bedrock:` vs `bedrock-mantle:`). 둘을 같은
+값으로 묶으면 IRSA 정책을 모델별로 나눌 수 없습니다.
+
+`endpoint_url`은 Mantle 계열 전용이며 **필수**입니다. DB CHECK와 애플리케이션 검증 두 겹으로 막습니다.
+
+```sql
+CHECK (provider <> 'BEDROCK_MANTLE' OR endpoint_url IS NOT NULL)
+```
+
+- 역방향(`BEDROCK`인데 값이 있음)은 막지 않습니다. Bedrock adapter가 이 컬럼을 읽지 않아 무해하고,
+  VPC endpoint 같은 용도의 여지를 닫지 않습니다.
+- 값은 `https://`로 시작해야 합니다. 평문 HTTP로 모델 호출이 나가지 않게 합니다.
+- 엔드포인트를 설정 파일이 아니라 카탈로그에 두는 이유는, "어디로 부르는가"가 alias 해석의
+  결과이기 때문입니다. 설정에 두면 카탈로그와 설정이 이원화되어 ADR-0001이 LiteLLM을 버린 것과
+  같은 문제가 생깁니다.
+
 ## Pricing
 
 단가는 시계열입니다(`model.model_pricings`). 이유:
@@ -157,15 +176,24 @@ POST /api/v1/models
 
 ## Cache Invalidation
 
-| 변경 | 삭제 키(제안) | 추가 팬아웃 |
+| 변경 | 삭제 키 | 추가 팬아웃 |
 |---|---|---|
-| alias 생성/수정/상태 변경 | `policy:model:{alias}` | 없음 |
-| 단가 등록 | `policy:model:{alias}` | 없음 |
+| alias 생성/수정/상태 변경 | `policy:model:{alias}` + `policy:model:list` | 없음 |
+| 단가 등록 | `policy:model:{alias}` + `policy:model:list` | 없음 |
 | 팀 허용 모델 변경 | `policy:allowed_models:team:{team_id}` | 그 팀 소속 VK 전부의 `vk:auth:{hash}` |
 | 사용자 허용 모델 변경 | `policy:allowed_models:user:{user_id}` | 그 사용자 소유 VK 전부의 `vk:auth:{hash}` |
 | VK 허용 모델 변경 | — | 해당 VK의 `vk:auth:{hash}` |
 
 `INACTIVE` 전환은 "차단"이므로 캐시 삭제 실패를 응답에 드러냅니다(폐기와 같은 취급).
+
+**`policy:model:list`를 항상 함께 지웁니다.** 이 목록은 `/v1/models` 응답의 재료이면서 허용 모델
+해석의 "team 층 0개 → 카탈로그 ACTIVE 전체"의 재료이기도 합니다. 목록 항목이 `supported_dialects`와
+`max_output_tokens`를 싣고 있어서, 상태 전환만 트리거로 잡으면 방언이 바뀐 모델이 옛 값으로 남습니다.
+
+**카탈로그 변경 시 VK 캐시를 팬아웃 삭제하지 않습니다.** 이미 굳어진 `vk:auth` 스냅샷은 TTL(300초)
+까지 옛 허용 목록을 들고 있고, 그게 정상 동작입니다. 새 모델 접근이 최대 300초 늦게 열릴 뿐이며,
+반대 방향(`INACTIVE`)은 gateway가 요청 시점에 모델 상태를 다시 확인해 잡습니다
+([09](09-gateway-contract-response.md) Q1).
 
 ## Validation
 
@@ -191,6 +219,7 @@ Bedrock 공시 단가 자동 동기화(참조 구현의 pricing sync)는 **범�
 | 항목 | 참조 구현 | 이 프로젝트 | 근거 |
 |---|---|---|---|
 | 방언 | `api_format` 단일 값 | `supported_dialects` 배열 | ADR-0003. 한 모델이 두 방언으로 노출될 수 있어야 합니다 |
+| Mantle | `provider` 값 + `endpoint_url` 보유 | 동일 (gateway 요청 S1·S2로 도입) | 권한 경계가 다른 백엔드를 같은 값으로 묶을 수 없습니다 |
 | 단가 자동 동기화 | AWS 단가 sync preview/apply 구현 | 범위 밖 | 잘못된 자동 갱신의 파급이 큽니다. 수동 등록 + 누락 감지로 시작 |
 | 캐시 | 생성 시 `model:{alias}` 선주입 시도 이력 있음 | 무효화만 | AGENTS.md 캐시 소유권. 참조 구현도 캐시 오염 사고 후 invalidate-only로 회귀했습니다 |
 | 캐시 단가 | 5분/1시간 캐시 생성 단가 분리 | write/read 2종 | Bedrock 온디맨드 기준선. 필요 시 컬럼 추가 |

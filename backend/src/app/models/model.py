@@ -51,6 +51,12 @@ class ModelAlias(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint("alias ~ '^[a-z0-9][a-z0-9.-]{1,127}$'", name="ck_model_alias_format"),
         CheckConstraint("array_length(supported_dialects, 1) >= 1", name="ck_model_dialects_not_empty"),
+        # Mantle 은 엔드포인트가 있어야 부를 수 있습니다. 없으면 첫 호출에서야 실패하므로
+        # 등록 시점에 막습니다. 역방향(BEDROCK 인데 값이 있음)은 막지 않습니다(09 문서 S2).
+        CheckConstraint(
+            "provider <> 'BEDROCK_MANTLE' OR endpoint_url IS NOT NULL",
+            name="ck_model_endpoint_required",
+        ),
         {"schema": "model"},
     )
 
@@ -59,6 +65,8 @@ class ModelAlias(Base, TimestampMixin):
     provider: Mapped[Provider] = mapped_column(pg_enum(Provider, "provider", "model"), nullable=False)
     provider_model_id: Mapped[str] = mapped_column(String(512), nullable=False)
     region: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Mantle 계열 전용. "어디로 부르는가"는 alias 해석의 결과이므로 설정이 아니라 카탈로그가 갖습니다.
+    endpoint_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     #: ADR-0003. 모델마다 노출 방언이 다를 수 있습니다.
     supported_dialects: Mapped[list[ApiDialect]] = mapped_column(
         ARRAY(pg_enum(ApiDialect, "api_dialect", "model")), nullable=False

@@ -19,6 +19,7 @@ from app.models.model import (
     UserAllowedModel,
 )
 from app.models.usage import (
+    AuthEvent,
     DailyUsageAggregate,
     MonthlyUsageAggregate,
     UsageEvent,
@@ -27,6 +28,7 @@ from app.models.usage import (
 __all__ = [
     "AdminJWTConfig",
     "AuditLog",
+    "AuthEvent",
     "Base",
     "BudgetConfig",
     "BudgetUsage",

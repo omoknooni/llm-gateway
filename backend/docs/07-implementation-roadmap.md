@@ -24,7 +24,7 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
 | M6~M8 | 미착수 |
-| gateway 요청 스키마 변경 (S1~S4) | 접수·수용. 마이그레이션 미반영 — [09](09-gateway-contract-response.md) |
+| gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
 **미검증 항목**: 개발 환경에 PostgreSQL 이 없어 마이그레이션 실 적용과 통합 테스트를 아직
 돌리지 못했습니다. 현재 검증 범위는 오프라인 SQL 렌더링(`alembic upgrade head --sql`)과
@@ -181,6 +181,8 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 | 3 | `usage.usage_events`·`usage.auth_events` 파티셔닝 도입 시점과 보존 기간 | 01, M7 | 실사용 볼륨이 보인 뒤. 두 테이블을 한 결정으로 묶음 |
 | 4 | 부서(department) 계층 도입 여부 | 01, 02, 05 | 예산 롤업 요구가 생기면 |
 | 5 | `TEAM` 소유 VK 사용량의 사용자 축 표현 | 03, 05, M7 | M7 대시보드 설계 시 |
+| 10 | `client`의 집계 축 편입 — `usage.daily_client_usage` 신설 여부 | 01, M7 | M7. 주 집계 PK는 건드리지 않기로 확정 |
+| 11 | 스풀 드롭 기록 `usage.ingest_gaps`의 최종 형태 | 01, Phase 4 | Phase 4. Prometheus 직접 조회는 배제 확정 |
 | 6 | 과거 단가 소급 변경 시 재집계 정책 | 04, M7 | 단가 조정이 실제로 발생할 때 |
 | 7 | 429 거절 이력의 영속화 여부 | 06 | gateway 메트릭 설계와 함께 |
 | 8 | Bedrock 공시 단가 자동 동기화 도입 여부 | 04 | 수동 등록이 부담이 된 뒤 |

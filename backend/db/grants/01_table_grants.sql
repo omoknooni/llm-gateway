@@ -9,9 +9,14 @@ GRANT SELECT ON usage.usage_events TO backend_app;
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON usage.daily_usage_aggregates, usage.monthly_usage_aggregates TO backend_app;
 
+-- 정책 거절 기록(usage.auth_events)은 gateway 가 쓰고 backend 가 읽습니다.
+REVOKE ALL ON usage.auth_events FROM backend_app;
+GRANT SELECT ON usage.auth_events TO backend_app;
+
 -- ── gateway_app ──
 -- 정책을 읽어 집행만 합니다. 정책을 정의하지 않습니다.
 GRANT UPDATE (last_used_at) ON auth.virtual_keys TO gateway_app;
 GRANT INSERT, UPDATE ON budget.budget_usages TO gateway_app;
 GRANT INSERT, SELECT ON usage.usage_events TO gateway_app;
+GRANT INSERT, SELECT ON usage.auth_events TO gateway_app;
 GRANT SELECT ON usage.daily_usage_aggregates, usage.monthly_usage_aggregates TO gateway_app;

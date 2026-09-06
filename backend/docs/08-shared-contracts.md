@@ -65,26 +65,31 @@ TTL은 gateway가 확정했습니다(2026-09-06 회신).
 
 | 키 | 값 | TTL | 채움 |
 |---|---|---|---|
-| `vk:auth:{key_hash}` | 인증 컨텍스트 JSON (`virtual_key_id`, `owner_type`, `owner_id`, `team_id`, `user_id`, `status`, `expires_at`, `allowed_model_aliases`, `idp_subject`) | 300s | gateway |
+| `vk:auth:{key_hash}` | 인증 컨텍스트 JSON (`virtual_key_id`, `owner_type`, `owner_id`, `team_id`, `user_id`, `status`, `expires_at`, `allowed_model_aliases`) | 300s | gateway |
 | `policy:model:{alias}` | 모델 해석 + 현재 단가 (`pricing_id` 포함) | 300s | gateway |
 | `policy:allowed_models:{scope}:{id}` | `scope ∈ {team, user}` | 300s | gateway |
 | `policy:budget:{scope}:{id}` | 예산 설정(한도, 정책, 임계값) | 300s | gateway |
 | `policy:ratelimit:{scope}:{id}:{model_alias\|*}` | rate limit 설정 | 300s | gateway |
+| `policy:model:list` | 카탈로그의 ACTIVE alias 목록 | 300s | gateway |
 
 - `allowed_model_aliases`는 3층 해석이 끝난 **최종 목록**입니다. "전체 허용"(`None`)을 캐시에 넣지
   않습니다. 빈 목록은 "이 키로 쓸 수 있는 모델 없음"이라는 유효한 상태입니다.
-- `idp_subject`는 C2 원안에 없던 필드입니다. gateway가 provider metadata로 전달합니다
-  ([09](09-gateway-contract-response.md) Q4에 확인 대기 항목).
+- `policy:model:list`는 `/v1/models` 응답의 재료이면서 허용 모델 3층 해석의 "team 층 0개 →
+  카탈로그 ACTIVE 전체"의 재료이기도 합니다. **낡게 만드는 주체가 backend**이므로 공유 키입니다.
+  backend는 `model_aliases`의 **모든 변경**(생성·수정·상태 전환)에서 `policy:model:{alias}`와
+  함께 지웁니다([09](09-gateway-contract-response.md) Q1).
+- 카탈로그 변경 시 **전 VK 캐시를 팬아웃 삭제하지 않습니다.** 이미 굳어진 `vk:auth` 스냅샷은
+  TTL(300초)까지 옛 허용 목록을 들고 있고, 이는 정상 동작입니다. 새 모델 접근이 최대 300초 늦게
+  열릴 뿐이며, 반대 방향(INACTIVE)은 gateway의 `ScopeCheck`가 모델 상태를 다시 확인해 잡습니다.
 
 ### gateway 전용 캐시 — backend는 존재를 알되 건드리지 않음
 
 | 키 | 값 | TTL |
 |---|---|---|
 | `vk:miss:{key_hash}` | 미등록 키의 음성 캐시. DB 재조회 억제 | 30s |
-| `policy:model:list` | 활성 alias 목록 (`/v1/models` 응답 재료) | 60s |
 
-`policy:model:list`를 낡게 만드는 주체는 backend(카탈로그 변경)입니다. 무효화 주체를 어디에 둘지는
-[09](09-gateway-contract-response.md) Q1에서 확인 중입니다.
+VK는 256비트 랜덤이라 발급 전에 그 해시가 조회될 일이 없습니다. 따라서 새 키가 음성 캐시에
+막히는 상황은 생기지 않고, backend가 발급 시 이 키를 지울 필요도 없습니다.
 
 ### 집행 카운터 — gateway 전용. backend는 읽기만
 

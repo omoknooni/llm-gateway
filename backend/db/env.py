@@ -50,6 +50,9 @@ def run_migrations_offline() -> None:
         include_schemas=True,
         include_object=include_object,
         dialect_opts={"paramstyle": "named"},
+        # online 경로와 같은 이유(0004 의 enum 값을 0005 가 씁니다). offline 스크립트도
+        # 리비전마다 BEGIN/COMMIT 이 나뉘어야 한 번에 실행됩니다.
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -62,6 +65,10 @@ def _do_run_migrations(connection) -> None:
         include_schemas=True,
         include_object=include_object,
         compare_type=True,
+        # 리비전마다 트랜잭션을 분리합니다. PostgreSQL 은 `ALTER TYPE ... ADD VALUE` 로 추가한
+        # enum 값을 같은 트랜잭션에서 쓰지 못하므로, 값 추가(0004)와 사용(0005)이 한 트랜잭션에
+        # 묶이면 upgrade 가 실패합니다.
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()

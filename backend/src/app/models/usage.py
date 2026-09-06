@@ -13,6 +13,7 @@ from decimal import Decimal
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -20,9 +21,11 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -74,6 +77,64 @@ class UsageEvent(Base):
         Uuid, ForeignKey("model.model_pricings.id"), nullable=True
     )
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 요청을 보낸 도구. 인가 신호가 아니라 관측 라벨입니다(위조 가능한 헤더에서 옵니다).
+    #: 값 집합은 gateway 설정의 화이트리스트로 제한되고, 미등록 값은 'other' 로 떨어집니다.
+    client: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuthEvent(Base):
+    """정책 거절 기록. **gateway 가 INSERT** 하고 backend 는 읽기만 합니다.
+
+    provider 호출이 일어난 실패(`ERROR`/`TIMEOUT`)는 `usage_events` 로, 정책이 막은 거절
+    (401/403/429)은 이 테이블로 갑니다. 후자를 `usage_events` 에 넣으면 토큰도 비용도 0인 행이
+    대량으로 쌓여 모든 집계 쿼리가 그것을 걸러내야 합니다.
+
+    control plane 감사(`audit.audit_logs`)와도 분리됩니다. 저 QPS 테이블에 고 QPS 쓰기를
+    넣지 않기 위해서입니다(03 문서).
+
+    gateway 는 동일 출처의 연속 실패를 60초 창으로 묶어 **한 행으로** 기록합니다. 따라서
+    조회 시 행 수가 아니라 `SUM(occurrence_count)` 를 써야 합니다. 창은 프로세스 로컬이라
+    pod 수만큼 행이 나뉘고, 행 수로 세면 실패가 과소 계상됩니다.
+    """
+
+    __tablename__ = "auth_events"
+    __table_args__ = (
+        CheckConstraint("occurrence_count >= 1", name="ck_auth_events_count_positive"),
+        CheckConstraint("occurred_at >= first_occurred_at", name="ck_auth_events_window_order"),
+        Index("ix_auth_events_occurred_at", "occurred_at"),
+        Index("ix_auth_events_vk_occurred", "virtual_key_id", "occurred_at"),
+        Index("ix_auth_events_hash_prefix_occurred", "key_hash_prefix", "occurred_at"),
+        {"schema": "usage"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: 창의 마지막 실패 시각.
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: 창의 첫 실패 시각.
+    first_occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: 창 안의 실패 수. 1건뿐이어도 1 입니다.
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    #: 거절 사유. enum 이 아니라 text 입니다 — 값이 늘 때마다 backend 마이그레이션을 기다리면
+    #: "내용은 gateway 가 결정한다"(C5)가 뒤집힙니다. 알려진 값 집합은 09 문서에 고정합니다.
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    virtual_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("auth.virtual_keys.id"), nullable=True
+    )
+    #: `sha256(원문)` 의 앞 8자. `virtual_keys.key_prefix`(원문의 표시용 앞부분)와 **다른 값**입니다.
+    #: 미등록 키의 반복 실패를 묶어 보기 위한 것이고, 32비트로는 원문을 복원할 수 없습니다.
+    key_hash_prefix: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("auth.teams.id"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("auth.users.id"), nullable=True
+    )
+    client: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 카탈로그에 없는 alias 로 거절된 경우도 있으므로 **FK 를 걸지 않습니다.**
+    model_alias: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(INET, nullable=True)
+    #: 창의 **첫** 요청 id. 그 요청의 로그 라인이 원인을 담고 있어 조사 진입점이 됩니다.
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
 
 
 class _AggregateColumns:

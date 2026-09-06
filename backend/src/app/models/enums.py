@@ -30,9 +30,11 @@ class VKStatus(enum.StrEnum):
 
 
 class Provider(enum.StrEnum):
-    # 현재는 BEDROCK 하나지만 enum 으로 둡니다. provider 추상화 유지가 ADR-0001 의 후속 조건이고,
-    # 나중에 컬럼 타입을 바꾸는 것보다 값을 추가하는 편이 쌉니다.
     BEDROCK = "BEDROCK"
+    #: Bedrock Mantle. 전송 방식(HTTPS + bearer)과 IAM 네임스페이스(`bedrock-mantle:`)가
+    #: native 와 다른 별도 백엔드입니다. 권한 경계가 다른 것을 같은 값으로 묶으면
+    #: IRSA 정책을 모델별로 나눌 수 없습니다(09 문서 S1).
+    BEDROCK_MANTLE = "BEDROCK_MANTLE"
 
 
 class ApiDialect(enum.StrEnum):

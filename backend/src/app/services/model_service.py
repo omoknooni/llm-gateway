@@ -18,7 +18,7 @@ from app.core.cache_invalidation import CacheInvalidationManager
 from app.core.clock import utcnow
 from app.core.deps import RequestContext
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.models.enums import ModelStatus
+from app.models.enums import ModelStatus, Provider
 from app.models.model import ModelAlias, ModelPricing
 from app.repositories.model_repository import ModelAliasRepository, ModelPricingRepository
 from app.schemas.models import (
@@ -55,6 +55,7 @@ def _model_response(alias: ModelAlias, pricing: ModelPricing | None) -> ModelRes
         provider=alias.provider,
         provider_model_id=alias.provider_model_id,
         region=alias.region,
+        endpoint_url=alias.endpoint_url,
         supported_dialects=list(alias.supported_dialects),
         status=alias.status,
         max_input_tokens=alias.max_input_tokens,
@@ -83,12 +84,15 @@ class ModelService:
         if await alias_repo.get(data.alias) is not None:
             raise ConflictError("같은 alias 가 이미 있습니다", code="duplicate_alias")
 
+        self._validate_endpoint(data.provider, data.endpoint_url)
+
         alias = ModelAlias(
             alias=data.alias,
             display_name=data.display_name,
             provider=data.provider,
             provider_model_id=data.provider_model_id,
             region=data.region,
+            endpoint_url=data.endpoint_url,
             supported_dialects=data.supported_dialects,
             status=ModelStatus.ACTIVE,
             max_input_tokens=data.max_input_tokens,
@@ -118,7 +122,7 @@ class ModelService:
             request_id=ctx.request_id,
         )
         await self._commit(session)
-        await self._cache.invalidate([cache_keys.model_policy(alias.alias)])
+        await self._cache.invalidate(self._policy_keys(alias.alias))
 
         await session.refresh(alias)
         return _model_response(alias, pricing)
@@ -164,6 +168,7 @@ class ModelService:
             "display_name",
             "provider_model_id",
             "region",
+            "endpoint_url",
             "max_input_tokens",
             "max_output_tokens",
             "supports_streaming",
@@ -174,6 +179,7 @@ class ModelService:
                 setattr(alias, field, value)
         if data.supported_dialects is not None:
             alias.supported_dialects = data.supported_dialects
+        self._validate_endpoint(alias.provider, alias.endpoint_url)
 
         await audit.record_for(
             session,
@@ -193,7 +199,7 @@ class ModelService:
             request_id=ctx.request_id,
         )
         await self._commit(session)
-        await self._cache.invalidate([cache_keys.model_policy(alias.alias)])
+        await self._cache.invalidate(self._policy_keys(alias.alias))
 
         await session.refresh(alias)
         pricing = await ModelPricingRepository(session).current_for_alias(alias_name, at=utcnow())
@@ -238,7 +244,7 @@ class ModelService:
         )
         await self._commit(session)
 
-        result = await self._cache.invalidate([cache_keys.model_policy(alias.alias)])
+        result = await self._cache.invalidate(self._policy_keys(alias.alias))
         if data.status == ModelStatus.INACTIVE and not result.ok:
             logger.warning("model_service.inactive_cache_not_cleared", alias=alias.alias)
 
@@ -291,7 +297,7 @@ class ModelService:
             request_id=ctx.request_id,
         )
         await self._commit(session)
-        await self._cache.invalidate([cache_keys.model_policy(alias_name)])
+        await self._cache.invalidate(self._policy_keys(alias_name))
 
         return _pricing_response(pricing)
 
@@ -306,6 +312,28 @@ class ModelService:
         return await ModelPricingRepository(session).aliases_without_current_pricing(at=utcnow())
 
     # ── 내부 ──
+
+    @staticmethod
+    def _policy_keys(alias_name: str) -> list[str]:
+        """카탈로그 변경 시 지울 캐시 키.
+
+        목록 키를 항상 함께 지웁니다(09 문서 Q1). 목록 항목이 `supported_dialects` 와
+        `max_output_tokens` 를 싣고 있어서, 상태 전환만 트리거로 잡으면 방언이 바뀐 모델이
+        `/v1/models` 에 옛 값으로 남습니다.
+        """
+        return [cache_keys.model_policy(alias_name), cache_keys.model_list()]
+
+    @staticmethod
+    def _validate_endpoint(provider: Provider, endpoint_url: str | None) -> None:
+        """Mantle 은 엔드포인트가 있어야 부를 수 있습니다.
+
+        DB CHECK 와 이중 방어입니다. 제약은 새로 들어오는 행만 막고, 여기서는 사람이 읽는
+        오류 메시지를 줍니다.
+        """
+        if provider == Provider.BEDROCK_MANTLE and not endpoint_url:
+            raise ValidationError(
+                "BEDROCK_MANTLE 모델은 endpoint_url 이 필요합니다", code="endpoint_url_required"
+            )
 
     @staticmethod
     def _build_pricing(alias: str, data: PricingCreateRequest, actor_id: uuid.UUID) -> ModelPricing:

@@ -24,6 +24,20 @@ def model_policy(alias: str) -> str:
     return f"policy:model:{alias}"
 
 
+def model_list() -> str:
+    """활성 alias 목록.
+
+    원래 gateway 전용 키였지만 **이 키를 낡게 만드는 주체가 backend**(카탈로그 변경)라서
+    공유 키로 옮겼습니다(09 문서 Q1). `/v1/models` 응답의 재료이면서 동시에 허용 모델 3층
+    해석에서 "team 층 0개 → 카탈로그 ACTIVE 전체"의 재료이기도 합니다.
+
+    상태 전환만이 아니라 `model_aliases` 의 **모든 변경**에서 지웁니다. 목록 항목이
+    `supported_dialects`·`max_output_tokens` 를 싣고 있어, 상태만 트리거로 잡으면 방언이 바뀐
+    모델이 옛 값으로 남습니다.
+    """
+    return "policy:model:list"
+
+
 def allowed_models(scope: str, scope_id: uuid.UUID | str) -> str:
     """허용 모델. scope 는 'team' 또는 'user'."""
     return f"policy:allowed_models:{scope}:{scope_id}"
