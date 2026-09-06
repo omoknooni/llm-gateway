@@ -25,6 +25,7 @@ from gateway.api import health
 from gateway.config import get_settings
 from gateway.db import create_engine, create_session_factory
 from gateway.logging import configure_logging
+from gateway.middleware.client_id import ClientIdentificationMiddleware
 from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.redis_client import create_redis
 
@@ -66,6 +67,8 @@ def create_app() -> FastAPI:
         openapi_url=None,
     )
 
+    # 등록 순서는 실행 순서의 역순입니다(마지막 등록 = 가장 바깥).
+    app.add_middleware(ClientIdentificationMiddleware)
     app.add_middleware(RequestContextMiddleware)  # 가장 바깥 = 가장 먼저 실행
 
     app.include_router(health.router)
