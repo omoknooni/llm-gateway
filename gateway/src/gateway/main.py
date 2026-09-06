@@ -18,6 +18,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager, suppress
 
+import httpx
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -31,6 +32,8 @@ from gateway.middleware.auth import AuthMiddleware
 from gateway.middleware.client_id import ClientIdentificationMiddleware
 from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.providers.bedrock import BedrockAdapter
+from gateway.providers.credentials import MantleCredentialBroker
+from gateway.providers.mantle import MantleAdapter
 from gateway.providers.registry import ProviderRegistry
 from gateway.redis_client import create_redis
 from gateway.services.auth_event_recorder import AuthEventRecorder
@@ -64,8 +67,20 @@ async def lifespan(app: FastAPI):
     app.state.model_resolver = resolver
     app.state.router = Router(settings, resolver)
 
+    # Mantle 은 전 구간 async 라 httpx 클라이언트 하나를 공유합니다.
+    mantle_http = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=settings.mantle_connect_timeout,
+            read=settings.stream_timeout,
+            write=10,
+            pool=30,
+        )
+    )
+    app.state.mantle_http = mantle_http
+
     registry = ProviderRegistry()
     registry.register("BEDROCK", BedrockAdapter(settings))
+    registry.register("BEDROCK_MANTLE", MantleAdapter(mantle_http, MantleCredentialBroker()))
     app.state.provider_registry = registry
 
     # 기동 시 의존성 연결을 확인하지 **않습니다.** Redis 나 DB 가 늦게 뜨는 상황에서 pod 가
@@ -85,6 +100,7 @@ async def lifespan(app: FastAPI):
         # 열린 창을 전부 비웁니다. 종료가 곧 감사 기록의 유실이 되면 안 됩니다.
         await app.state.auth_events.flush(app.state.session_factory, force=True)
         await app.state.usage_recorder.drain(app.state.session_factory)
+        await mantle_http.aclose()
         await redis.aclose()
         await engine.dispose()
 

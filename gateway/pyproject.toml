@@ -14,6 +14,9 @@ dependencies = [
     "structlog>=24.4.0",
     "boto3>=1.35.0",
     "httpx>=0.27.0",
+    # Mantle 백엔드의 SigV4 bearer 발급. 이 의존성이 없으면 Mantle 경로만 실패하고
+    # gateway 는 정상 기동합니다(providers/credentials 의 지연 import).
+    "aws-bedrock-token-generator>=1.1.0",
 ]
 
 # 마이그레이션 의존성(alembic)이 없는 것은 의도입니다.

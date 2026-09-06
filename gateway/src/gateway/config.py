@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     #: gateway 가 자체 재시도를 소유합니다. botocore 재시도와 곱해지면 장애 시 요청 폭풍이 됩니다.
     bedrock_max_attempts: int = 1
 
+    #: Mantle 은 HTTPS 로 부르므로 별도 타임아웃을 갖습니다.
+    mantle_connect_timeout: float = 5.0
+
     # ── 요청 한도와 타임아웃 (docs/01) ──
     max_body_size: int = 20 * 1024 * 1024
     stream_timeout: int = 300
