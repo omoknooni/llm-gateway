@@ -20,6 +20,7 @@
 | [05-budget-management.md](05-budget-management.md) | 예산 설정/배분 CRUD, 소진 조회, 집행 계약 |
 | [06-rate-limit-management.md](06-rate-limit-management.md) | rate limit 설정 CRUD, 우선순위 해석, 집행 계약 |
 | [07-implementation-roadmap.md](07-implementation-roadmap.md) | 마일스톤, 순서, 테스트 전략, 미결정 사항 |
+| [08-shared-contracts.md](08-shared-contracts.md) | gateway와 공유하는 계약 모음 (키 규약, 해석 규칙, DB 경계) |
 
 ## 문서 규칙
 
