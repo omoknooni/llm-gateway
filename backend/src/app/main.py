@@ -134,6 +134,7 @@ def create_app() -> FastAPI:
         service_tokens,
         teams,
         users,
+        virtual_keys,
     )
 
     app.include_router(health.router)
@@ -142,6 +143,8 @@ def create_app() -> FastAPI:
     api = APIRouter(prefix=settings.API_PREFIX)
     api.include_router(users.router)
     api.include_router(teams.router)
+    api.include_router(virtual_keys.router)
+    api.include_router(virtual_keys.team_router)
     api.include_router(models.router)
     api.include_router(allowed_models.router)
     api.include_router(service_tokens.router)

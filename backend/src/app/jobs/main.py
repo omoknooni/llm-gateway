@@ -1,0 +1,90 @@
+"""주기 작업 실행기.
+
+API 프로세스와 같은 이미지, 다른 엔트리포인트로 실행합니다(Deployment 분리).
+
+    python -m app.jobs.main
+"""
+
+from __future__ import annotations
+
+import asyncio
+import signal
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+
+import structlog
+
+from app.core.cache_invalidation import CacheInvalidationManager
+from app.core.config import get_settings
+from app.core.db import create_engine, dispose_engine, get_session_factory, session_scope
+from app.core.logging import configure_logging
+from app.core.redis_client import create_redis_client
+from app.jobs.catalog_jobs import check_missing_pricing
+from app.jobs.locks import advisory_lock
+from app.jobs.virtual_key_jobs import expire_virtual_keys
+
+logger = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class Job:
+    name: str
+    interval_seconds: int
+    run: Callable[..., Awaitable[object]]
+    needs_cache: bool = False
+
+
+JOBS: list[Job] = [
+    Job("expire_virtual_keys", 300, expire_virtual_keys, needs_cache=True),
+    Job("retry_cache_invalidation", 60, lambda session, cache: cache.retry_failed(), needs_cache=True),
+    Job("check_missing_pricing", 3600, check_missing_pricing),
+]
+
+
+async def _run_once(job: Job, cache: CacheInvalidationManager) -> None:
+    async with session_scope() as session, advisory_lock(session, job.name) as acquired:
+        if not acquired:
+            logger.debug("job.skipped_locked", job=job.name)
+            return
+        if job.needs_cache:
+            await job.run(session, cache)
+        else:
+            await job.run(session)
+
+
+async def _loop(job: Job, cache: CacheInvalidationManager, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await _run_once(job, cache)
+        except Exception as exc:  # 한 작업의 실패가 다른 작업을 멈추면 안 됩니다.
+            logger.error("job.failed", job=job.name, error=str(exc), exc_info=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=job.interval_seconds)
+        except TimeoutError:
+            continue
+
+
+async def run() -> None:
+    settings = get_settings()
+    configure_logging(level=settings.LOG_LEVEL, json_output=settings.APP_ENV != "development")
+    settings.validate_runtime()
+
+    create_engine()
+    redis = create_redis_client()
+    cache = CacheInvalidationManager(redis, get_session_factory())
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+
+    logger.info("jobs.started", jobs=[job.name for job in JOBS])
+    await asyncio.gather(*(_loop(job, cache, stop) for job in JOBS))
+
+    await redis.aclose()
+    await dispose_engine()
+    logger.info("jobs.stopped")
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
