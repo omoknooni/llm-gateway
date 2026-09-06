@@ -302,7 +302,7 @@ gateway 브랜치의 응답입니다.
 
 | 단계 | 내용 | 산출물 |
 |---|---|---|
-| M1 | 골격 — app factory, 설정, Redis/DB 연결, `/healthz`·`/readyz`, pure ASGI 미들웨어 뼈대 | 기동되는 빈 gateway |
+| ~~M1~~ | 골격 — app factory, 설정, Redis/DB 연결, `/healthz`·`/readyz`, pure ASGI 미들웨어 뼈대 | 기동되는 빈 gateway |
 | M2 | VK 인증 + 허용 모델 3층 해석 + client 식별 ([02](02-virtual-key-auth.md), [03](03-client-identification.md)) | 인증된 요청이 라우터까지 도달 |
 | M3 | 모델 해석 ([04](04-backend-routing.md)) | `ModelConfig`·`BackendDecision` 확정 |
 | M4 | Bedrock 호출 + Anthropic Messages 방언 (non-stream → stream) ([01](01-api-entrypoint.md), [05](05-provider-invocation.md)) | 실제 추론 응답 |
@@ -312,6 +312,9 @@ gateway 브랜치의 응답입니다.
 방언은 순차적으로 붙입니다. 내부 표현과 adapter 경계를 먼저 세우는 순서를 지킵니다
 ([ADR-0003](../../docs/adr-0003-client-api-dialects.md) Follow-up).
 M6은 backend의 스키마 변경(S1·S2)에 의존하므로 마지막에 둡니다.
+
+> **현황(2026-09-06)**: M1~M6 구현 완료. 남은 것은 실제 PostgreSQL·Redis·Bedrock을 붙인
+> 통합 테스트와 Phase 4입니다. 진행 상태는 [gateway/README.md](../README.md)에 있습니다.
 
 Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이지만, 미들웨어 자리와 Redis 키
 네임스페이스는 지금 비워 둡니다.
