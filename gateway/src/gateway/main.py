@@ -21,7 +21,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from gateway.api import health
+from gateway.api import anthropic, health
 from gateway.config import get_settings
 from gateway.core.tasks import BackgroundTasks
 from gateway.db import create_engine, create_session_factory
@@ -29,10 +29,13 @@ from gateway.logging import configure_logging
 from gateway.middleware.auth import AuthMiddleware
 from gateway.middleware.client_id import ClientIdentificationMiddleware
 from gateway.middleware.request_context import RequestContextMiddleware
+from gateway.providers.bedrock import BedrockAdapter
+from gateway.providers.registry import ProviderRegistry
 from gateway.redis_client import create_redis
 from gateway.services.auth_service import AuthService
 from gateway.services.last_used import LastUsedTracker
 from gateway.services.model_resolver import ModelResolver
+from gateway.services.router import Router
 
 logger = structlog.get_logger(__name__)
 
@@ -52,7 +55,13 @@ async def lifespan(app: FastAPI):
     app.state.background = BackgroundTasks()
     app.state.auth_service = AuthService(settings)
     app.state.last_used = LastUsedTracker(settings.last_used_throttle_seconds)
-    app.state.model_resolver = ModelResolver(settings)
+    resolver = ModelResolver(settings)
+    app.state.model_resolver = resolver
+    app.state.router = Router(settings, resolver)
+
+    registry = ProviderRegistry()
+    registry.register("BEDROCK", BedrockAdapter(settings))
+    app.state.provider_registry = registry
 
     # 기동 시 의존성 연결을 확인하지 **않습니다.** Redis 나 DB 가 늦게 뜨는 상황에서 pod 가
     # 기동 실패로 재시작을 반복하면 복구가 더 느려집니다. 준비 여부는 /readyz 가 답합니다.
@@ -84,6 +93,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)  # 가장 바깥 = 가장 먼저 실행
 
     app.include_router(health.router)
+    app.include_router(anthropic.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:

@@ -75,7 +75,16 @@ class AnthropicMessagesDialect:
     def parse(
         self, body: bytes, *, default_max_tokens: int, model: ModelConfig | None = None
     ) -> NormalizedRequest:
-        data = load_json(body)
+        return self.parse_data(load_json(body), default_max_tokens=default_max_tokens, model=model)
+
+    def parse_data(
+        self, data: dict[str, Any], *, default_max_tokens: int, model: ModelConfig | None = None
+    ) -> NormalizedRequest:
+        """이미 읽어 둔 JSON 에서 파싱합니다.
+
+        라우터는 모델을 해석하려고 본문을 한 번 읽어야 하고, `max_tokens` 검증에는 그 모델이
+        필요합니다. 같은 본문을 두 번 파싱하지 않기 위한 진입점입니다.
+        """
         reject_unknown_fields(data, ACCEPTED_FIELDS)
 
         model_alias = require(data, "model")

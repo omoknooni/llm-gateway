@@ -101,8 +101,9 @@ ModelConfig.alias ∉ allowed_model_aliases  →  403 model_not_allowed
 - **비교는 `alias` 하나로만 합니다.** 허용 목록에는 alias만 들어 있고, 해석된 `ModelConfig`를
   기준으로 보므로 client가 provider_model_id로 요청해도 같은 판정이 나옵니다. 요청 문자열로
   비교하면 같은 모델을 다른 이름으로 불러 화이트리스트를 우회할 수 있습니다.
-- 검사는 **모델 해석 이후, 호출 이전**입니다. 순서가 뒤집히면 존재하지 않는 모델에 대해 403을
-  주거나, 허용되지 않은 모델의 존재 여부를 알려주게 됩니다.
+- 검사는 **모델 해석 이후, 호출 이전**입니다. 해석보다 앞서면 존재하지 않는 모델에 403을 주게 됩니다.
+- **ScopeCheck를 방언 호환성 검사보다 먼저** 합니다. 허용되지 않은 키는 어떻게 물어보든 같은
+  답(403)을 받아야 합니다. 방언 검사가 앞서면 권한 없는 키가 그 모델의 지원 방언을 알아냅니다.
 - 3층 해석에서 이미 INACTIVE가 제외되므로, 허용 목록에 있다는 것은 카탈로그에서 살아 있다는
   뜻이기도 합니다. 그래도 `ModelConfig.status`를 다시 봅니다 — 캐시 만료 시점이 서로 다릅니다.
 
@@ -122,7 +123,7 @@ class BackendDecision:
 
 ```text
 1. model   ← alias 해석 (Redis → DB)
-2. 방언 호환성 검사 → ScopeCheck
+2. ScopeCheck → 방언 호환성 검사
 3. provider ← model.provider          카탈로그가 결정한다
 4. region   ← model.region ?? settings.aws_region
 5. call_model_id ← 리전 접두사 재작성
