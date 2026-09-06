@@ -126,12 +126,14 @@ def create_app() -> FastAPI:
         logger.error("request.unhandled", error=str(exc), exc_info=True)
         return _error_response(500, "internal_error", "내부 오류가 발생했습니다", {}, request)
 
-    from app.routers import health, internal, service_tokens
+    from app.routers import health, internal, service_tokens, teams, users
 
     app.include_router(health.router)
 
     # 도메인 라우터는 전부 버전 prefix 아래에 둡니다.
     api = APIRouter(prefix=settings.API_PREFIX)
+    api.include_router(users.router)
+    api.include_router(teams.router)
     api.include_router(service_tokens.router)
     api.include_router(internal.router)
     app.include_router(api)

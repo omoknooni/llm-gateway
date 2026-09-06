@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    @field_validator("ADMIN_EMAILS", "ADMIN_GROUPS", mode="before")
+    @field_validator("ADMIN_EMAILS", "ADMIN_GROUPS", "ALLOWED_EMAIL_DOMAINS", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """콤마 구분 문자열을 리스트로. `NoDecode` 로 기본 JSON 파싱을 껐기 때문에 필요합니다."""
@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # 역할 부트스트랩. 이메일 또는 그룹이 매칭되면 ADMIN 을 부여합니다.
     ADMIN_EMAILS: Annotated[list[str], NoDecode] = []
     ADMIN_GROUPS: Annotated[list[str], NoDecode] = []
+
+    #: 사용자 생성 시 허용할 이메일 도메인. 비어 있으면 검사하지 않습니다.
+    ALLOWED_EMAIL_DOMAINS: Annotated[list[str], NoDecode] = []
 
     # ── Virtual Key ──
     VIRTUAL_KEY_ENV: str = "dev"  # 키 문자열에 박히는 환경 세그먼트 (live | dev)
