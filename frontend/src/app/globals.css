@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+
+/* 다크 모드는 <html class="dark"> 로 전환합니다. 시스템 설정은 초기값으로만 씁니다. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/**
+ * 디자인 토큰.
+ *
+ * 색은 전부 여기서만 정의하고 컴포넌트에는 하드코딩하지 않습니다(00 문서 UI Baseline).
+ * 순백/순흑을 쓰지 않는 이유는 다크 모드에서 대비가 깨지기 때문입니다.
+ */
+:root {
+  --background: oklch(0.985 0.002 250);
+  --foreground: oklch(0.21 0.014 258);
+
+  --surface: oklch(1 0 0);
+  --surface-muted: oklch(0.968 0.003 250);
+
+  --border: oklch(0.906 0.005 255);
+  --border-strong: oklch(0.845 0.008 255);
+  --ring: oklch(0.58 0.11 210);
+
+  --muted-foreground: oklch(0.52 0.012 258);
+
+  --primary: oklch(0.52 0.104 213);
+  --primary-foreground: oklch(0.99 0 0);
+  --primary-soft: oklch(0.95 0.025 213);
+
+  --danger: oklch(0.55 0.196 22);
+  --danger-foreground: oklch(0.99 0 0);
+  --danger-soft: oklch(0.955 0.03 22);
+
+  --warning: oklch(0.62 0.14 70);
+  --warning-soft: oklch(0.96 0.045 80);
+
+  --success: oklch(0.55 0.11 160);
+  --success-soft: oklch(0.95 0.04 160);
+
+  --info: oklch(0.55 0.12 265);
+  --info-soft: oklch(0.955 0.03 265);
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: oklch(0.185 0.011 258);
+  --foreground: oklch(0.93 0.005 250);
+
+  --surface: oklch(0.226 0.012 258);
+  --surface-muted: oklch(0.262 0.013 258);
+
+  --border: oklch(0.32 0.014 258);
+  --border-strong: oklch(0.4 0.016 258);
+  --ring: oklch(0.66 0.1 210);
+
+  --muted-foreground: oklch(0.68 0.012 258);
+
+  --primary: oklch(0.72 0.1 210);
+  --primary-foreground: oklch(0.19 0.012 258);
+  --primary-soft: oklch(0.3 0.045 213);
+
+  --danger: oklch(0.66 0.17 22);
+  --danger-foreground: oklch(0.19 0.012 258);
+  --danger-soft: oklch(0.31 0.07 22);
+
+  --warning: oklch(0.75 0.13 75);
+  --warning-soft: oklch(0.32 0.055 75);
+
+  --success: oklch(0.7 0.11 162);
+  --success-soft: oklch(0.29 0.05 162);
+
+  --info: oklch(0.7 0.11 265);
+  --info-soft: oklch(0.3 0.055 265);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ring: var(--ring);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+
+  --radius-base: var(--radius);
+  --radius-card: calc(var(--radius) + 0.25rem);
+
+  --font-sans:
+    ui-sans-serif, system-ui, 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 자릿수가 세로로 맞아야 표에서 금액을 비교할 수 있습니다. */
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}

@@ -1,0 +1,15 @@
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+
+# 의존성
+/node_modules/
+
+# 타입 검사 캐시
+*.tsbuildinfo
+
+# 환경 변수 (.env.example 만 커밋합니다)
+.env
+.env.local
+.env.*.local
