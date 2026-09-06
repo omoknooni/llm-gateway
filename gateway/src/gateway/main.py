@@ -14,8 +14,9 @@ Starlette 의 `add_middleware` 는 목록 앞에 삽입하므로 **마지막에 
 
 from __future__ import annotations
 
+import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import structlog
 from fastapi import FastAPI, Request
@@ -32,10 +33,12 @@ from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.providers.bedrock import BedrockAdapter
 from gateway.providers.registry import ProviderRegistry
 from gateway.redis_client import create_redis
+from gateway.services.auth_event_recorder import AuthEventRecorder
 from gateway.services.auth_service import AuthService
 from gateway.services.last_used import LastUsedTracker
 from gateway.services.model_resolver import ModelResolver
 from gateway.services.router import Router
+from gateway.services.usage_recorder import UsageRecorder
 
 logger = structlog.get_logger(__name__)
 
@@ -55,6 +58,8 @@ async def lifespan(app: FastAPI):
     app.state.background = BackgroundTasks()
     app.state.auth_service = AuthService(settings)
     app.state.last_used = LastUsedTracker(settings.last_used_throttle_seconds)
+    app.state.usage_recorder = UsageRecorder(settings.usage_spool_max)
+    app.state.auth_events = AuthEventRecorder(settings.auth_event_window_seconds)
     resolver = ModelResolver(settings)
     app.state.model_resolver = resolver
     app.state.router = Router(settings, resolver)
@@ -65,15 +70,41 @@ async def lifespan(app: FastAPI):
 
     # 기동 시 의존성 연결을 확인하지 **않습니다.** Redis 나 DB 가 늦게 뜨는 상황에서 pod 가
     # 기동 실패로 재시작을 반복하면 복구가 더 느려집니다. 준비 여부는 /readyz 가 답합니다.
+    flusher = asyncio.create_task(_flush_loop(app), name="record-flush")
+
     logger.info("gateway.started", env=settings.app_env, version=settings.app_version)
     try:
         yield
     finally:
         logger.info("gateway.shutting_down")
+        flusher.cancel()
+        with suppress(asyncio.CancelledError):
+            await flusher
         # 진행 중인 기록(사용량, last_used_at)에 마지막 기회를 준 뒤 연결을 닫습니다.
         await app.state.background.drain()
+        # 열린 창을 전부 비웁니다. 종료가 곧 감사 기록의 유실이 되면 안 됩니다.
+        await app.state.auth_events.flush(app.state.session_factory, force=True)
+        await app.state.usage_recorder.drain(app.state.session_factory)
         await redis.aclose()
         await engine.dispose()
+
+
+async def _flush_loop(app: FastAPI) -> None:
+    """닫힌 거절 창을 쓰고, 스풀에 밀린 사용량 기록을 다시 시도합니다.
+
+    사용량 기록은 요청마다 즉시 쓰므로 여기서 하는 일은 **DB 가 돌아왔을 때의 복구**뿐입니다.
+    거절 기록은 창이 닫혀야 쓸 수 있어 이 주기가 곧 기록 지연 상한입니다.
+    """
+    interval = max(app.state.settings.auth_event_window_seconds, 1)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await app.state.auth_events.flush(app.state.session_factory)
+            await app.state.usage_recorder.drain(app.state.session_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("record_flush.failed", error=str(exc))
 
 
 def create_app() -> FastAPI:

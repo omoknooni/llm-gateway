@@ -7,19 +7,23 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from fastapi import Request
 
-from gateway.core.context import STATE_AUTH, AuthContext
+from gateway.core.context import STATE_AUTH, STATE_REQUEST, AuthContext, RequestContext
 from gateway.core.dialect import ApiDialect
 from gateway.core.errors import ErrorCode, GatewayError
 from gateway.core.model import ModelConfig
-from gateway.core.normalized import NormalizedRequest
+from gateway.core.normalized import NormalizedRequest, TokenUsage
 from gateway.core.routing import BackendDecision
 from gateway.dialects.base import load_json
 from gateway.providers.base import ProviderAdapter
+from gateway.services.streaming import StreamAccumulator
+from gateway.services.usage_recorder import build_record
 
 
 class ParsingDialect(Protocol):
@@ -35,6 +39,7 @@ class PreparedCall:
     decision: BackendDecision
     adapter: ProviderAdapter
     raw: dict[str, Any]
+    dialect: ApiDialect
 
 
 async def prepare(
@@ -72,7 +77,12 @@ async def prepare(
     adapter = app_state.provider_registry.get(decision.provider)
 
     return PreparedCall(
-        auth=auth, normalized=normalized, decision=decision, adapter=adapter, raw=data
+        auth=auth,
+        normalized=normalized,
+        decision=decision,
+        adapter=adapter,
+        raw=data,
+        dialect=api_dialect,
     )
 
 
@@ -89,3 +99,96 @@ async def read_body(request: Request, limit: int) -> bytes:
     if len(body) > limit:
         raise GatewayError(ErrorCode.REQUEST_TOO_LARGE, "Request body is too large")
     return body
+
+
+# ── 기록 ──
+#
+# 기록 위치가 둘로 나뉩니다(docs/01 의 표).
+#
+#     provider 호출이 일어난 실패 (ERROR / TIMEOUT)  → usage_events
+#     정책이 막은 거절 (401 / 403 / 429)             → auth_events
+#     요청 자체가 잘못됨 (문법·크기·미지원 필드)      → 기록 없음, 로그와 메트릭만
+
+
+def record_usage(
+    request: Request,
+    call: PreparedCall,
+    *,
+    status: str,
+    usage: TokenUsage,
+    ttft_ms: int | None,
+    is_streaming: bool,
+    error_code: str | None = None,
+) -> None:
+    """응답을 반환한 뒤 백그라운드로 씁니다. 기록 실패가 client 응답에 영향을 주지 않습니다."""
+    ctx: RequestContext = request.scope["state"][STATE_REQUEST]
+    app_state = request.app.state
+    record = build_record(
+        request_id=ctx.request_id,
+        auth=call.auth,
+        decision=call.decision,
+        dialect=call.dialect.value,
+        status=status,
+        usage=usage,
+        latency_ms=ctx.elapsed_ms,
+        ttft_ms=ttft_ms,
+        is_streaming=is_streaming,
+        error_code=error_code,
+        client=ctx.client,
+    )
+    app_state.background.spawn(
+        app_state.usage_recorder.record(app_state.session_factory, record), name="usage"
+    )
+
+
+def record_rejection(request: Request, err: GatewayError, call: PreparedCall | None = None) -> None:
+    """`outcome` 이 있는 오류만 기록합니다.
+
+    잘못된 요청(문법·크기·미지원 필드)까지 DB 에 남기면 client 버그 하나가 테이블을 채웁니다.
+    """
+    if err.outcome is None:
+        return
+    ctx: RequestContext = request.scope["state"][STATE_REQUEST]
+    auth = call.auth if call else request.scope["state"].get(STATE_AUTH)
+    request.app.state.auth_events.observe(
+        outcome=err.outcome.value,
+        request_id=ctx.request_id,
+        key_hash_prefix=err.key_hash_prefix,
+        source_ip=ctx.source_ip,
+        client=ctx.client,
+        virtual_key_id=auth.virtual_key_id if auth else None,
+        team_id=auth.team_id if auth else None,
+        user_id=auth.user_id if auth else None,
+        model_alias=err.model_alias or (call.decision.model.alias if call else None),
+    )
+
+
+async def stream_with_finalize(
+    frames: AsyncIterator[bytes],
+    *,
+    request: Request,
+    call: PreparedCall,
+    accumulator: StreamAccumulator,
+) -> AsyncIterator[bytes]:
+    """스트림이 끝나거나 끊긴 뒤 반드시 한 번 기록합니다.
+
+    client 가 연결을 끊어도 이미 발생한 비용은 존재합니다. `finally` 로 두는 이유가 그것입니다 —
+    정상 종료, 예외, client 끊김(GeneratorExit) 어느 쪽이든 같은 자리를 지납니다.
+    """
+    ttft_ms: int | None = None
+    started = time.monotonic()
+    try:
+        async for frame in frames:
+            if ttft_ms is None:
+                ttft_ms = int((time.monotonic() - started) * 1000)
+            yield frame
+    finally:
+        record_usage(
+            request,
+            call,
+            status="ERROR" if accumulator.failed else "SUCCESS",
+            usage=accumulator.usage,
+            ttft_ms=ttft_ms,
+            is_streaming=True,
+            error_code="provider_error" if accumulator.failed else None,
+        )

@@ -35,7 +35,7 @@ class RequestContextMiddleware:
         # 사내 서비스의 기존 상관 id 체계를 끊게 됩니다.
         request_id = incoming[:128] or str(uuid.uuid4())
 
-        ctx = RequestContext(request_id=request_id)
+        ctx = RequestContext(request_id=request_id, source_ip=_source_ip(scope, headers))
         state = scope.setdefault("state", {})
         state[STATE_REQUEST] = ctx
 
@@ -51,3 +51,15 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             structlog.contextvars.unbind_contextvars("request_id", "path")
+
+
+def _source_ip(scope: Scope, headers: dict[bytes, bytes]) -> str | None:
+    """프록시(ALB) 뒤에 있으므로 X-Forwarded-For 의 **첫** 항목이 원 client 입니다.
+
+    이 값은 거절 기록의 묶음 축일 뿐 인가에 쓰지 않습니다. 위조 가능한 헤더입니다.
+    """
+    forwarded = headers.get(b"x-forwarded-for", b"").decode("latin-1")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or None
+    client = scope.get("client")
+    return client[0] if client else None

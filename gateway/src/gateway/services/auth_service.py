@@ -53,14 +53,19 @@ def hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
-def _invalid(message: str, outcome: AuthOutcome) -> GatewayError:
+def _invalid(
+    message: str, outcome: AuthOutcome, key_hash: str | None = None
+) -> GatewayError:
     """거절 사유를 client 에게 알려주지 않습니다.
 
     "폐기된 키"와 "없는 키"를 구분해 주면 키 열거에 쓰입니다. 구분은 `auth_events.outcome`
     으로 우리 쪽에만 남깁니다.
     """
     return GatewayError(
-        ErrorCode.INVALID_VIRTUAL_KEY, "Invalid virtual key", outcome=outcome
+        ErrorCode.INVALID_VIRTUAL_KEY,
+        "Invalid virtual key",
+        outcome=outcome,
+        key_hash_prefix=key_hash[:KEY_HASH_PREFIX_LEN] if key_hash else None,
     )
 
 
@@ -103,7 +108,7 @@ class AuthService:
         del token
 
         if await self._is_known_miss(redis, key_hash):
-            raise _invalid("Known invalid key", AuthOutcome.INVALID_KEY)
+            raise _invalid("Known invalid key", AuthOutcome.INVALID_KEY, key_hash)
 
         cached = await self._cached_context(redis, key_hash)
         if cached is not None:
@@ -187,7 +192,7 @@ class AuthService:
         if context.expires_at is not None and context.expires_at <= datetime.now(UTC):
             # 지우지 않으면 만료된 스냅샷이 TTL 까지 남아 매 요청 같은 판정을 반복합니다.
             await self._forget(redis, key_hash)
-            raise _invalid("Key expired", AuthOutcome.EXPIRED)
+            raise _invalid("Key expired", AuthOutcome.EXPIRED, key_hash)
         return context
 
     # ── DB ──
@@ -218,18 +223,18 @@ class AuthService:
 
         if row is None:
             await self._remember_miss(redis, key_hash)
-            raise _invalid("Unknown key", AuthOutcome.INVALID_KEY)
+            raise _invalid("Unknown key", AuthOutcome.INVALID_KEY, key_hash)
 
         if row.status not in LIVE_STATUSES:
             await self._remember_miss(redis, key_hash)
             outcome = (
                 AuthOutcome.EXPIRED if row.status == VKStatus.EXPIRED else AuthOutcome.REVOKED
             )
-            raise _invalid(f"Key is {row.status}", outcome)
+            raise _invalid(f"Key is {row.status}", outcome, key_hash)
 
         if row.expires_at is not None and row.expires_at <= datetime.now(UTC):
             await self._remember_miss(redis, key_hash)
-            raise _invalid("Key expired", AuthOutcome.EXPIRED)
+            raise _invalid("Key expired", AuthOutcome.EXPIRED, key_hash)
 
         # TEAM 소유 키는 사람이 없으므로 팀 활성만 봅니다.
         owner_active = row.team_active and (
@@ -237,7 +242,7 @@ class AuthService:
         )
         if not owner_active:
             await self._remember_miss(redis, key_hash)
-            raise _invalid("Owner is inactive", AuthOutcome.OWNER_INACTIVE)
+            raise _invalid("Owner is inactive", AuthOutcome.OWNER_INACTIVE, key_hash)
 
         user_id = str(row.user_id) if row.user_id else None
         allowed = await self._resolve_allowed(

@@ -39,6 +39,7 @@ def _not_found(model_ref: str) -> GatewayError:
         ErrorCode.MODEL_INACTIVE,
         f"Model '{model_ref}' is not available",
         outcome=AuthOutcome.MODEL_INACTIVE,
+        model_alias=model_ref,
     )
 
 

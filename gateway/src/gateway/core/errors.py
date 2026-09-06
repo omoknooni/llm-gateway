@@ -73,15 +73,24 @@ class GatewayError(Exception):
         retry_after: int | None = None,
         param: str | None = None,
         outcome: AuthOutcome | None = None,
+        key_hash_prefix: str | None = None,
+        model_alias: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.retry_after = retry_after
         self.param = param
-        #: 값이 있으면 `usage.auth_events` 에 기록될 거절입니다. None 이면 기록하지 않습니다
-        #: (요청 자체가 잘못됐거나 의존성 장애 — docs/01 의 기록 위치 표).
+        # 아래 셋은 **기록 힌트**입니다. 거절을 `usage.auth_events` 에 남길 때 쓰이고
+        # client 응답에는 나가지 않습니다.
+        #: 값이 있으면 기록될 거절입니다. None 이면 기록하지 않습니다(요청 자체가 잘못됐거나
+        #: 의존성 장애 — docs/01 의 기록 위치 표).
         self.outcome = outcome
+        #: sha256(원문) 의 앞 8자. 미등록 키를 묶어 보기 위한 값이고 원문 복원에 쓸 수 없습니다.
+        #: `virtual_keys.key_prefix`(원문 표시값)와 다른 값입니다.
+        self.key_hash_prefix = key_hash_prefix
+        #: 모델 단계에서 막힌 거절이 어느 alias 였는지.
+        self.model_alias = model_alias
 
     @property
     def status(self) -> int:

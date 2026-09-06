@@ -25,6 +25,8 @@ class RequestContext:
     #: time.monotonic() 기준. 벽시계는 NTP 보정으로 뒤로 갈 수 있어 지연 측정에 쓰지 않습니다.
     started_at: float = field(default_factory=time.monotonic)
     client: str = CLIENT_OTHER
+    #: 거절 기록의 묶음 축. 프록시 뒤에 있으므로 X-Forwarded-For 의 첫 항목을 씁니다.
+    source_ip: str | None = None
 
     @property
     def elapsed_ms(self) -> int:

@@ -9,9 +9,16 @@ import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import Response, StreamingResponse
 
-from gateway.api.pipeline import PreparedCall, prepare
+from gateway.api.pipeline import (
+    PreparedCall,
+    prepare,
+    record_rejection,
+    record_usage,
+    stream_with_finalize,
+)
 from gateway.core.dialect import ApiDialect
-from gateway.core.errors import GatewayError
+from gateway.core.errors import ErrorCode, GatewayError
+from gateway.core.normalized import TokenUsage
 from gateway.dialects.anthropic import AnthropicMessagesDialect, new_message_id
 from gateway.dialects.errors import error_body, error_headers
 from gateway.services.streaming import StreamAccumulator, guard
@@ -27,25 +34,45 @@ async def messages(request: Request) -> Response:
     try:
         call = await prepare(request, dialect=DIALECT, api_dialect=ApiDialect.ANTHROPIC_MESSAGES)
     except GatewayError as err:
+        record_rejection(request, err)
         return _error(err)
 
     if call.normalized.stream:
         return await _stream(request, call)
-    return await _invoke(call)
+    return await _invoke(request, call)
 
 
-async def _invoke(call: PreparedCall) -> Response:
+async def _invoke(request: Request, call: PreparedCall) -> Response:
     try:
         response = await call.adapter.invoke(
             call.normalized, call.decision, end_user_id=call.auth.end_user_id
         )
     except GatewayError as err:
+        # provider 호출이 시작된 뒤의 실패입니다. 토큰은 0 이라도 행은 남깁니다 —
+        # 실패도 운영 관점에서는 중요한 신호입니다.
+        record_usage(
+            request,
+            call,
+            status="TIMEOUT" if err.code is ErrorCode.UPSTREAM_TIMEOUT else "ERROR",
+            usage=TokenUsage(),
+            ttft_ms=None,
+            is_streaming=False,
+            error_code=err.code.value,
+        )
         return _error(err)
 
     if not response.response_id:
         # provider 가 id 를 주지 않는 경우가 있습니다. client SDK 는 id 를 기대합니다.
         response.response_id = new_message_id()
 
+    record_usage(
+        request,
+        call,
+        status="SUCCESS",
+        usage=response.usage,
+        ttft_ms=None,
+        is_streaming=False,
+    )
     return Response(
         content=DIALECT.response(response, model_alias=call.decision.model.alias),
         media_type="application/json",
@@ -60,13 +87,23 @@ async def _stream(request: Request, call: PreparedCall) -> Response:
             call.normalized, call.decision, end_user_id=call.auth.end_user_id
         )
     except GatewayError as err:
+        record_usage(
+            request,
+            call,
+            status="TIMEOUT" if err.code is ErrorCode.UPSTREAM_TIMEOUT else "ERROR",
+            usage=TokenUsage(),
+            ttft_ms=None,
+            is_streaming=True,
+            error_code=err.code.value,
+        )
         return _error(err)
 
     accumulator = StreamAccumulator()
     guarded = guard(events, idle_timeout=settings.stream_idle_timeout, accumulator=accumulator)
 
+    frames = DIALECT.stream(guarded, model_alias=call.decision.model.alias)
     return StreamingResponse(
-        DIALECT.stream(guarded, model_alias=call.decision.model.alias),
+        stream_with_finalize(frames, request=request, call=call, accumulator=accumulator),
         media_type="text/event-stream",
         headers={
             "cache-control": "no-cache",

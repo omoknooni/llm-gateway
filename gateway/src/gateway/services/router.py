@@ -64,6 +64,7 @@ class Router:
                 f"Model '{model.alias}' is not allowed for this key",
                 param="model",
                 outcome=AuthOutcome.MODEL_NOT_ALLOWED,
+                model_alias=model.alias,
             )
 
         if not model.supports(dialect):
