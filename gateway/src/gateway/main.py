@@ -32,6 +32,7 @@ from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.redis_client import create_redis
 from gateway.services.auth_service import AuthService
 from gateway.services.last_used import LastUsedTracker
+from gateway.services.model_resolver import ModelResolver
 
 logger = structlog.get_logger(__name__)
 
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.background = BackgroundTasks()
     app.state.auth_service = AuthService(settings)
     app.state.last_used = LastUsedTracker(settings.last_used_throttle_seconds)
+    app.state.model_resolver = ModelResolver(settings)
 
     # 기동 시 의존성 연결을 확인하지 **않습니다.** Redis 나 DB 가 늦게 뜨는 상황에서 pod 가
     # 기동 실패로 재시작을 반복하면 복구가 더 느려집니다. 준비 여부는 /readyz 가 답합니다.

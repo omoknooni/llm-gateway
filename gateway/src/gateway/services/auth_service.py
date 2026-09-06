@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import json
-from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import structlog
@@ -25,13 +23,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.config import Settings
-from gateway.core import cache_keys
+from gateway.core import cache, cache_keys
 from gateway.core.context import AuthContext
 from gateway.core.errors import AuthOutcome, ErrorCode, GatewayError
 from gateway.policy.allowed_models import resolve
 from gateway.schema.auth import Team, User, VirtualKey, VirtualKeyAllowedModel
-from gateway.schema.base import ModelStatus, VKOwnerType, VKStatus
-from gateway.schema.model import ModelAlias, TeamAllowedModel, UserAllowedModel
+from gateway.schema.base import VKOwnerType, VKStatus
+from gateway.schema.model import TeamAllowedModel, UserAllowedModel
+from gateway.services.model_resolver import load_active_aliases
 
 logger = structlog.get_logger(__name__)
 
@@ -265,7 +264,11 @@ class AuthService:
         대량 무효화 직후에 효과가 큽니다. VK 층은 VK 에 종속이라 `vk:auth` 스냅샷 안에
         최종 결과로만 들어가고 따로 캐시하지 않습니다.
         """
-        catalog_active = await self._catalog_active(db, redis)
+        # 카탈로그 목록은 모델 해석과 같은 캐시 키를 공유합니다. 두 곳이 각자 캐시하면
+        # backend 의 무효화가 한쪽에만 닿습니다.
+        catalog_active = await load_active_aliases(
+            db, redis, self._settings.policy_cache_ttl_seconds
+        )
         team_allowed = await self._scope_allowed(db, redis, "team", team_id)
         user_allowed = (
             await self._scope_allowed(db, redis, "user", user_id) if user_id else ()
@@ -285,27 +288,13 @@ class AuthService:
             key_allowed=key_allowed,
         ).aliases
 
-    async def _catalog_active(self, db: AsyncSession, redis) -> tuple[str, ...]:
-        cached = await self._cached_list(redis, cache_keys.model_list())
-        if cached is not None:
-            return cached
-        aliases = tuple(
-            (
-                await db.execute(
-                    select(ModelAlias.alias).where(ModelAlias.status == ModelStatus.ACTIVE)
-                )
-            ).scalars().all()
-        )
-        await self._cache_list(redis, cache_keys.model_list(), aliases)
-        return aliases
-
     async def _scope_allowed(
         self, db: AsyncSession, redis, scope: str, scope_id: str
     ) -> tuple[str, ...]:
         key = cache_keys.allowed_models(scope, scope_id)
-        cached = await self._cached_list(redis, key)
+        cached = await cache.get_json(redis, key)
         if cached is not None:
-            return cached
+            return tuple(cached)
 
         if scope == "team":
             stmt = select(TeamAllowedModel.model_alias).where(TeamAllowedModel.team_id == scope_id)
@@ -313,28 +302,5 @@ class AuthService:
             stmt = select(UserAllowedModel.model_alias).where(UserAllowedModel.user_id == scope_id)
 
         aliases = tuple((await db.execute(stmt)).scalars().all())
-        await self._cache_list(redis, key, aliases)
+        await cache.set_json(redis, key, list(aliases), self._settings.policy_cache_ttl_seconds)
         return aliases
-
-    async def _cached_list(self, redis, key: str) -> tuple[str, ...] | None:
-        if redis is None:
-            return None
-        try:
-            raw = await redis.get(key)
-        except Exception:
-            return None
-        if raw is None:
-            return None
-        try:
-            return tuple(json.loads(raw))
-        except Exception:
-            logger.warning("auth.policy_cache_parse_failed_treated_as_miss", key=key)
-            return None
-
-    async def _cache_list(self, redis, key: str, values: Iterable[str]) -> None:
-        if redis is None:
-            return
-        with contextlib.suppress(Exception):
-            await redis.setex(
-                key, self._settings.policy_cache_ttl_seconds, json.dumps(list(values))
-            )
