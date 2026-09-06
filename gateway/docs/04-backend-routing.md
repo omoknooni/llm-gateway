@@ -168,8 +168,10 @@ AuthContext.allowed_model_aliases  ∩  policy:model:list (카탈로그 ACTIVE)
 허용 목록이 이미 3층 해석과 INACTIVE 제외를 거친 결과이므로, 교집합은 방어적 재확인입니다.
 목록과 집행이 서로 다른 판단을 쓰면 client는 보이는 모델을 부르고 403을 받습니다.
 
-`?dialect=` 같은 필터는 두지 않습니다. 대신 각 항목에 `supported_dialects`를 실어 client가
-스스로 거를 수 있게 합니다.
+응답은 **OpenAI 표준 형태**(`id` / `object` / `created` / `owned_by`)만 담습니다. 초안에서는
+각 항목에 `supported_dialects`를 실으려 했지만 철회했습니다 — OpenAI SDK는 비표준 필드를
+노출하지 않아 client가 읽을 수 없고, 실으려면 목록의 모든 alias를 개별 해석해야 합니다.
+방언이 맞지 않는 모델은 호출 시점에 `dialect_not_supported`가 대안 엔드포인트를 알려줍니다.
 
 ## 실패 정책
 

@@ -21,7 +21,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from gateway.api import anthropic, health
+from gateway.api import anthropic, health, openai
 from gateway.config import get_settings
 from gateway.core.tasks import BackgroundTasks
 from gateway.db import create_engine, create_session_factory
@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(anthropic.router)
+    app.include_router(openai.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
