@@ -13,17 +13,21 @@ import { MonoId } from '@/components/ui/copy-button';
 import { TBody, TEmpty, THead, Table, Td, Th, Tr } from '@/components/ui/table';
 import { KeyRowActions } from '@/components/keys/key-row-actions';
 import { getEffectiveModels } from '@/lib/api/allowed-models';
+import { getMyBudget } from '@/lib/api/budgets';
 import { listVirtualKeys } from '@/lib/api/virtual-keys';
 import { requirePageAccess } from '@/lib/auth/session';
 import { expiryHint, formatDateTime } from '@/lib/format/datetime';
+import { formatUsd } from '@/lib/format/decimal';
 import {
+  ALERT_LEVEL_LABEL,
+  ALERT_LEVEL_TONE,
   RESOLVED_FROM_LABEL,
   USER_ROLE_LABEL,
   USER_ROLE_TONE,
   VK_STATUS_LABEL,
   VK_STATUS_TONE,
 } from '@/lib/format/labels';
-import { VKOwnerType, VKStatus } from '@/types/api';
+import { VKOwnerType, VKStatus, type BudgetUsageItem } from '@/types/api';
 
 export const metadata = { title: '내 정보 — llm-gateway Admin' };
 
@@ -33,12 +37,37 @@ export const metadata = { title: '내 정보 — llm-gateway Admin' };
  * MEMBER 가 볼 수 있는 유일한 화면입니다. 자기 키를 폐기할 수는 있지만 발급할 수는
  * 없습니다(backend 인가 표). 그래서 발급 버튼이 없습니다.
  */
+/** 한도가 없는 쪽은 "미설정"으로 씁니다 — 0 으로 보여주면 못 쓰는 것처럼 읽힙니다. */
+function BudgetLine({ label, item }: { label: string; item: BudgetUsageItem | null }) {
+  if (!item) {
+    return (
+      <div>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">미설정 (무제한)</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="num mt-0.5 text-sm">
+        {formatUsd(item.used_usd)} / {formatUsd(item.limit_usd)}{' '}
+        <span className="text-muted-foreground">({item.usage_pct}%)</span>
+      </p>
+      <Badge tone={ALERT_LEVEL_TONE[item.alert_level]} className="mt-1">
+        {ALERT_LEVEL_LABEL[item.alert_level]}
+      </Badge>
+    </div>
+  );
+}
+
 export default async function MyPage() {
   const session = await requirePageAccess('/my');
 
-  const [effective, keys] = await Promise.all([
+  const [effective, keys, budget] = await Promise.all([
     getEffectiveModels(session.userId),
     listVirtualKeys({ owner_type: VKOwnerType.USER, owner_id: session.userId, limit: 100 }),
+    getMyBudget(),
   ]);
 
   return (
@@ -67,6 +96,25 @@ export default async function MyPage() {
                 )}
               </DescriptionItem>
             </DescriptionList>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="내 예산"
+            description={`${budget.period} (UTC 월 기준). 사용자 예산과 팀 예산 둘 다 집행에 쓰입니다.`}
+          />
+          <CardBody>
+            {!budget.user && !budget.team ? (
+              <p className="text-sm text-muted-foreground">
+                설정된 예산이 없습니다. 예산 미설정은 차단하지 않습니다.
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <BudgetLine label="내 예산" item={budget.user} />
+                <BudgetLine label="팀 예산" item={budget.team} />
+              </div>
+            )}
           </CardBody>
         </Card>
 

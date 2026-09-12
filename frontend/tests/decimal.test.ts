@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDecimal, formatUsdPrice } from '@/lib/format/decimal';
+import {
+  compareDecimals,
+  formatDecimal,
+  formatUsd,
+  formatUsdPrice,
+  sumDecimals,
+} from '@/lib/format/decimal';
 
 /**
  * 금액은 backend 가 문자열로 직렬화합니다. 표시 포맷을 거쳐도 정밀도가 유지되어야 합니다.
@@ -44,5 +50,44 @@ describe('formatUsdPrice', () => {
   it('1K 토큰 단가의 유효 자릿수를 자르지 않는다', () => {
     expect(formatUsdPrice('0.00025')).toBe('$0.00025');
     expect(formatUsdPrice('3')).toBe('$3.00');
+  });
+});
+
+/**
+ * 배분 합계는 "한도를 넘었는가"를 묻는 자리입니다. float 로 더하면 넘지 않은 합계가
+ * 넘은 것으로 보입니다 — 잘못된 경고는 잘못된 값만큼 나쁩니다.
+ */
+describe('sumDecimals', () => {
+  it('float 이었다면 어긋났을 합을 정확히 낸다', () => {
+    expect(sumDecimals(['0.1', '0.2'])).toBe('0.3');
+    expect(Number('0.1') + Number('0.2')).not.toBe(0.3);
+    expect(sumDecimals(['1000.0001', '2000.9999'])).toBe('3001');
+  });
+
+  it('빈 목록은 0 이다', () => {
+    expect(sumDecimals([])).toBe('0');
+  });
+
+  it('표현할 수 없는 값은 합치지 않고 null 을 낸다', () => {
+    // 소수 5자리는 backend 의 numeric(14,4) 에 담기지 않습니다. 잘라서 더하면 화면 합계가
+    // 저장될 값과 달라집니다.
+    expect(sumDecimals(['1.00001'])).toBeNull();
+    expect(sumDecimals(['1.0', 'abc'])).toBeNull();
+  });
+});
+
+describe('compareDecimals', () => {
+  it('한도와 합계를 자릿수 그대로 비교한다', () => {
+    expect(compareDecimals('1000.0000', '1000')).toBe(0);
+    expect(compareDecimals('1000.0001', '1000')).toBe(1);
+    expect(compareDecimals('999.9999', '1000')).toBe(-1);
+    expect(compareDecimals('x', '1000')).toBeNull();
+  });
+});
+
+describe('formatUsd', () => {
+  it('합계 금액은 두 자리로 자른다 (반올림하지 않는다)', () => {
+    expect(formatUsd('1234.5678')).toBe('$1,234.56');
+    expect(formatUsd('0')).toBe('$0.00');
   });
 });

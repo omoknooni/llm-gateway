@@ -14,6 +14,11 @@ export const PAGE_PERMISSIONS: Record<string, readonly UserRole[]> = {
   '/users': [UserRole.ADMIN, UserRole.TEAM_LEADER],
   '/keys': [UserRole.ADMIN, UserRole.TEAM_LEADER],
   '/models': [UserRole.ADMIN, UserRole.TEAM_LEADER],
+  // 관측·정책 화면(F6). backend 는 MEMBER 에게도 범위를 좁혀 응답하지만, 콘솔에서 MEMBER 가
+  // 보는 화면은 `/my` 하나로 유지합니다(01 문서). 자기 예산은 거기에 있습니다.
+  '/usage': [UserRole.ADMIN, UserRole.TEAM_LEADER],
+  '/budgets': [UserRole.ADMIN, UserRole.TEAM_LEADER],
+  '/rate-limits': [UserRole.ADMIN, UserRole.TEAM_LEADER],
   // ADMIN 을 넣지 않습니다. 플랫폼 운영자가 "내 사용량"을 보면 역할 경계가 흐려집니다.
   '/my': [UserRole.TEAM_LEADER, UserRole.MEMBER],
   '/settings': [UserRole.ADMIN],

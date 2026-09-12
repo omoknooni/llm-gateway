@@ -367,3 +367,351 @@ export interface ServiceTokenCreateRequest {
   name: string;
   expires_in_days?: number;
 }
+
+// ── 예산 (backend M6) ─────────────────────────────────────────────────────────
+
+export const BudgetScope = {
+  TEAM: 'TEAM',
+  USER: 'USER',
+} as const;
+export type BudgetScope = (typeof BudgetScope)[keyof typeof BudgetScope];
+
+export const BudgetPeriod = { MONTHLY: 'MONTHLY' } as const;
+export type BudgetPeriod = (typeof BudgetPeriod)[keyof typeof BudgetPeriod];
+
+export const BudgetPolicy = {
+  HARD_BLOCK: 'HARD_BLOCK',
+  SOFT_WARN: 'SOFT_WARN',
+} as const;
+export type BudgetPolicy = (typeof BudgetPolicy)[keyof typeof BudgetPolicy];
+
+/** 소진 경보 단계. **backend 가 `warn_thresholds` 로 계산합니다** — 프론트가 다시 계산하지 않습니다. */
+export const AlertLevel = {
+  NORMAL: 'NORMAL',
+  WARNING: 'WARNING',
+  CRITICAL: 'CRITICAL',
+  EXCEEDED: 'EXCEEDED',
+} as const;
+export type AlertLevel = (typeof AlertLevel)[keyof typeof AlertLevel];
+
+export interface BudgetSetRequest {
+  limit_usd: string;
+  policy?: BudgetPolicy;
+  period_type?: BudgetPeriod;
+  warn_thresholds?: number[];
+  effective_from?: string | null;
+}
+
+export interface BudgetConfigResponse {
+  id: string;
+  scope: BudgetScope;
+  scope_id: string;
+  limit_usd: string;
+  period_type: BudgetPeriod;
+  policy: BudgetPolicy;
+  warn_thresholds: number[];
+  effective_from: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `source`는 소진값을 Redis(집행 카운터)에서 읽었는지 DB 에서 읽었는지입니다. 숨기지 않습니다. */
+export interface BudgetUsageItem {
+  scope: BudgetScope;
+  scope_id: string;
+  name: string | null;
+  limit_usd: string;
+  used_usd: string;
+  remaining_usd: string;
+  usage_pct: string;
+  policy: BudgetPolicy;
+  alert_level: AlertLevel;
+  source: string;
+}
+
+export interface BudgetSummaryResponse {
+  period: string;
+  /** 항목별 출처가 섞이면 `mixed` 입니다. */
+  source: string;
+  items: BudgetUsageItem[];
+}
+
+export interface AllocationItem {
+  user_id: string;
+  limit_usd: string;
+}
+
+/** **전체 교체**입니다. 목록에 없는 멤버의 배분은 해제됩니다. */
+export interface AllocationSetRequest {
+  allocations: AllocationItem[];
+  policy?: BudgetPolicy;
+  warn_thresholds?: number[];
+}
+
+export interface AllocationEntry {
+  user_id: string;
+  display_name: string;
+  email: string;
+  limit_usd: string;
+  used_usd: string;
+  usage_pct: string;
+  alert_level: AlertLevel;
+  source: string;
+}
+
+export interface AllocationResponse {
+  team_id: string;
+  period: string;
+  team_limit_usd: string;
+  allocated_usd: string;
+  unallocated_usd: string;
+  allocations: AllocationEntry[];
+}
+
+export interface UsageBreakdownItem {
+  key: string;
+  name: string | null;
+  cost_usd: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface TeamBudgetUsageResponse {
+  period: string;
+  budget: BudgetUsageItem;
+  by_member: UsageBreakdownItem[];
+  by_model: UsageBreakdownItem[];
+}
+
+export interface UserBudgetUsageResponse {
+  period: string;
+  budget: BudgetUsageItem;
+  by_model: UsageBreakdownItem[];
+}
+
+/** 둘 다 null 이면 예산 미설정 = 무제한입니다. */
+export interface MyBudgetResponse {
+  period: string;
+  user: BudgetUsageItem | null;
+  team: BudgetUsageItem | null;
+}
+
+export interface UnsetBudgetTarget {
+  id: string;
+  name: string;
+  team_id: string | null;
+}
+
+export interface UnsetBudgetResponse {
+  teams: UnsetBudgetTarget[];
+  users: UnsetBudgetTarget[];
+}
+
+export interface ReseedItem {
+  scope: BudgetScope;
+  scope_id: string;
+  period: string;
+  used_usd: string;
+}
+
+/** 운영 예외입니다. 사유가 필수이고 감사에 before/after 가 남습니다. */
+export interface ReseedRequest {
+  items: ReseedItem[];
+  reason: string;
+}
+
+export interface ReseedResultItem {
+  scope: BudgetScope;
+  scope_id: string;
+  period: string;
+  before_usd: string | null;
+  after_usd: string;
+}
+
+export interface ReseedResponse {
+  items: ReseedResultItem[];
+}
+
+// ── rate limit (backend M8) ───────────────────────────────────────────────────
+
+export const RateLimitScope = {
+  GLOBAL: 'GLOBAL',
+  TEAM: 'TEAM',
+  USER: 'USER',
+  VIRTUAL_KEY: 'VIRTUAL_KEY',
+} as const;
+export type RateLimitScope = (typeof RateLimitScope)[keyof typeof RateLimitScope];
+
+/** 한도 종류. 셋은 독립이고 폴백도 **종류별로** 일어납니다(backend 06 문서). */
+export const LIMIT_FIELDS = ['rpm_limit', 'tpm_limit', 'concurrency_limit'] as const;
+export type LimitField = (typeof LIMIT_FIELDS)[number];
+
+/** `null` 은 "이 층에서 정의하지 않음"이고, 행 삭제는 `DELETE` 입니다. 셋 다 null 은 422. */
+export interface RateLimitSetRequest {
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  concurrency_limit?: number | null;
+}
+
+export interface RateLimitResponse {
+  id: string;
+  scope: RateLimitScope;
+  scope_id: string | null;
+  model_alias: string | null;
+  rpm_limit: number | null;
+  tpm_limit: number | null;
+  concurrency_limit: number | null;
+  /** **null 은 "계산하지 않음"** 입니다. 배지가 필요하면 `/tree` 나 `/effective` 를 봅니다. */
+  exceeds_parent: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RateLimitListResponse {
+  items: RateLimitResponse[];
+}
+
+export interface ResolvedLimitResponse {
+  value: number | null;
+  resolved_from: string | null;
+  config_id: string | null;
+}
+
+/** 주체 축과 전역 축은 **따로** 옵니다. 둘 다 통과해야 요청이 진행됩니다. */
+export interface EffectiveLimitsResponse {
+  subject: Record<string, string | null>;
+  effective_limits: Record<string, ResolvedLimitResponse>;
+  global_limits: Record<string, ResolvedLimitResponse>;
+}
+
+export interface RateLimitTreeMember {
+  user_id: string;
+  display_name: string;
+  own: RateLimitResponse | null;
+  effective_limits: Record<string, ResolvedLimitResponse>;
+}
+
+export interface RateLimitTreeResponse {
+  team_id: string;
+  team_name: string;
+  team_limits: RateLimitResponse | null;
+  members: RateLimitTreeMember[];
+}
+
+export interface ConflictingChild {
+  scope_id: string;
+  exceeds: Record<string, { child: number; parent: number }>;
+}
+
+/** 상위보다 큰 하위 설정은 **거절하지 않고 알립니다**. 연쇄 자동 조정을 하지 않습니다. */
+export interface RateLimitSetResponse {
+  config: RateLimitResponse;
+  conflicting_children: ConflictingChild[];
+}
+
+export interface RateLimitUsageEntry {
+  scope: RateLimitScope;
+  scope_id: string | null;
+  model_alias: string | null;
+  limit_value: number | null;
+  current_value: number | null;
+  usage_pct: number | null;
+}
+
+/** best-effort 입니다. `available=false` 는 오류가 아니라 정상 상태 중 하나입니다. */
+export interface RateLimitUsageResponse {
+  available: boolean;
+  reason: string | null;
+  entries: RateLimitUsageEntry[];
+}
+
+// ── 사용량·비용 (backend M7) ──────────────────────────────────────────────────
+
+export const UsageAxis = {
+  TEAM: 'TEAM',
+  USER: 'USER',
+  MODEL: 'MODEL',
+  VIRTUAL_KEY: 'VIRTUAL_KEY',
+} as const;
+export type UsageAxis = (typeof UsageAxis)[keyof typeof UsageAxis];
+
+export const UsageMetric = {
+  COST: 'COST',
+  REQUESTS: 'REQUESTS',
+  TOKENS: 'TOKENS',
+} as const;
+export type UsageMetric = (typeof UsageMetric)[keyof typeof UsageMetric];
+
+export const TrendGranularity = {
+  DAY: 'DAY',
+  MONTH: 'MONTH',
+} as const;
+export type TrendGranularity = (typeof TrendGranularity)[keyof typeof TrendGranularity];
+
+/** 금액·비율은 문자열, 토큰·호출 수는 number 입니다(backend 스키마 그대로). */
+export interface UsageTotals {
+  request_count: number;
+  success_count: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  estimated_cost_usd: string;
+  failure_rate_pct: string;
+  avg_latency_ms: number;
+}
+
+export interface LeaderboardEntry {
+  key: string;
+  name: string | null;
+  totals: UsageTotals;
+}
+
+export interface LeaderboardResponse {
+  axis: UsageAxis;
+  metric: UsageMetric;
+  from_date: string;
+  to_date: string;
+  items: LeaderboardEntry[];
+}
+
+export interface UsageOverviewResponse {
+  from_date: string;
+  to_date: string;
+  totals: UsageTotals;
+  top_teams: LeaderboardEntry[];
+  top_users: LeaderboardEntry[];
+  top_models: LeaderboardEntry[];
+}
+
+export interface UsageTrendPoint {
+  /** `YYYY-MM-DD`(일) 또는 `YYYY-MM`(월). */
+  bucket: string;
+  totals: UsageTotals;
+}
+
+/** 값이 없는 버킷은 **행이 없습니다**. 채우는 것은 기간을 아는 화면 몫입니다. */
+export interface UsageTrendResponse {
+  granularity: TrendGranularity;
+  from_date: string;
+  to_date: string;
+  points: UsageTrendPoint[];
+}
+
+export interface AuthEventSummaryItem {
+  outcome: string;
+  /** **묶음 창을 펼친 실제 실패 수**입니다. `event_rows` 로 세면 과소 계상됩니다. */
+  occurrence_count: number;
+  event_rows: number;
+}
+
+export interface AuthEventSummaryResponse {
+  from_date: string;
+  to_date: string;
+  total_occurrences: number;
+  items: AuthEventSummaryItem[];
+}

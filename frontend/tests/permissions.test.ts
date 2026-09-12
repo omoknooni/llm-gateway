@@ -5,8 +5,19 @@ import { UserRole } from '@/types/api';
 
 describe('canAccessPath', () => {
   it('표에 없는 경로는 기본 거부한다', () => {
-    expect(canAccessPath('/budgets', UserRole.ADMIN)).toBe(false);
+    // 아직 화면이 없는 경로들입니다. 새 화면을 만들면서 권한표에 등록하지 않으면 아무도
+    // 못 들어가고, 그게 반대(모두 통과)보다 안전합니다.
+    expect(canAccessPath('/audit-logs', UserRole.ADMIN)).toBe(false);
     expect(canAccessPath('/whatever', UserRole.ADMIN)).toBe(false);
+  });
+
+  it('관측·정책 화면(F6)은 ADMIN·팀장에게만 열린다', () => {
+    for (const path of ['/usage', '/budgets', '/budgets/team/abc', '/rate-limits']) {
+      expect(canAccessPath(path, UserRole.ADMIN)).toBe(true);
+      expect(canAccessPath(path, UserRole.TEAM_LEADER)).toBe(true);
+      // MEMBER 가 보는 화면은 `/my` 하나입니다. 자기 예산은 거기에 있습니다.
+      expect(canAccessPath(path, UserRole.MEMBER)).toBe(false);
+    }
   });
 
   it("루트는 정확히 '/' 일 때만 매칭해 하위 경로를 삼키지 않는다", () => {

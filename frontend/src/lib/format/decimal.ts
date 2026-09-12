@@ -55,3 +55,59 @@ export function formatUsdPrice(value: string, currency = 'USD'): string {
   const symbol = currency === 'USD' ? '$' : '';
   return `${symbol}${formatDecimal(value, { minFractionDigits: 2, maxFractionDigits: 8 })}`;
 }
+
+/**
+ * `$1,234.56` — 합계 금액. 단가(`formatUsdPrice`)와 자릿수를 다르게 씁니다.
+ *
+ * 단가는 `0.00003` 같은 값이라 8 자리까지 살려야 하지만, 소진액·비용 합계를 그 자릿수로
+ * 보여주면 읽을 수 없습니다. **값은 문자열 그대로이고 잘라내기만 합니다**(반올림 없음).
+ */
+export function formatUsd(value: string, currency = 'USD'): string {
+  const symbol = currency === 'USD' ? '$' : '';
+  return `${symbol}${formatDecimal(value, { minFractionDigits: 2, maxFractionDigits: 2 })}`;
+}
+
+/**
+ * 금액 문자열을 **1/10000 단위 정수**로 옮깁니다(backend `numeric(14,4)` 와 같은 눈금).
+ *
+ * 배분 합계를 미리 보여주려면 더하기가 필요한데, `Number` 로 더하면 `0.1 + 0.2` 가
+ * `0.30000000000000004` 가 됩니다. 한도와 합계가 같은지 묻는 화면에서 이런 차이는 그대로
+ * 잘못된 경고가 됩니다. 형식이 깨진 값은 `null` 입니다.
+ */
+const MONEY_SCALE = 4n;
+
+function toUnits(value: string): bigint | null {
+  const parts = split(value);
+  if (!parts) return null;
+  const frac = (parts.frac + '0'.repeat(Number(MONEY_SCALE))).slice(0, Number(MONEY_SCALE));
+  // 소수 4자리를 넘는 입력은 표현할 수 없습니다. 잘라서 합산하면 화면 합계가 조용히 달라집니다.
+  if (parts.frac.length > Number(MONEY_SCALE)) return null;
+  return BigInt(`${parts.sign}${parts.int}${frac}`);
+}
+
+function fromUnits(units: bigint): string {
+  const negative = units < 0n;
+  const digits = (negative ? -units : units).toString().padStart(5, '0');
+  const int = digits.slice(0, -4);
+  const frac = digits.slice(-4).replace(/0+$/, '');
+  return `${negative ? '-' : ''}${int}${frac ? `.${frac}` : ''}`;
+}
+
+/** 금액 문자열의 합. 하나라도 형식이 깨지면 `null` 입니다. */
+export function sumDecimals(values: string[]): string | null {
+  let total = 0n;
+  for (const value of values) {
+    const units = toUnits(value);
+    if (units === null) return null;
+    total += units;
+  }
+  return fromUnits(total);
+}
+
+/** `a - b` 의 부호. `null` 이면 비교할 수 없는 값입니다. */
+export function compareDecimals(a: string, b: string): number | null {
+  const left = toUnits(a);
+  const right = toUnits(b);
+  if (left === null || right === null) return null;
+  return left === right ? 0 : left > right ? 1 : -1;
+}
