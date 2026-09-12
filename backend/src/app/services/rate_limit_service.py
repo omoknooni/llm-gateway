@@ -251,15 +251,22 @@ class RateLimitService:
         actor: CurrentAdmin,
     ) -> RateLimitListResponse:
         if not actor.is_admin:
-            scope_ids = await self._visible_scope_ids(session, actor)
+            visible = await self._visible_scope_ids(session, actor)
+            # 권한 밖 대상을 지정하면 빈 목록이 아니라 403 입니다 — 빈 목록이면
+            # "설정이 없다"와 "볼 수 없다"를 구분할 수 없습니다(00 문서).
+            if scope_id is not None and scope_id not in visible:
+                raise ForbiddenError("조회 권한이 없는 대상입니다")
+
             configs = [
                 config
+                # 요청한 필터를 그대로 넘깁니다. 떨어뜨리면 권한 범위 전체가 돌아와
+                # 목록 필터 계약이 깨집니다.
                 for config in await RateLimitRepository(session).list_configs(
-                    scope=scope, model_alias=model_alias
+                    scope=scope, scope_id=scope_id, model_alias=model_alias
                 )
                 # 팀장은 자기 팀 축만 봅니다. GLOBAL 은 플랫폼 값이라 함께 보여줍니다 —
                 # 자기 한도가 왜 그런지 설명하려면 전역 축이 보여야 합니다.
-                if config.scope == RateLimitScope.GLOBAL or config.scope_id in scope_ids
+                if config.scope == RateLimitScope.GLOBAL or config.scope_id in visible
             ]
         else:
             configs = await RateLimitRepository(session).list_configs(
@@ -321,13 +328,21 @@ class RateLimitService:
             raise NotFoundError("Team", str(team_id))
 
         repo = RateLimitRepository(session)
-        team_configs = await repo.list_configs(scope=RateLimitScope.TEAM, scope_id=team_id)
+        # 요청한 모델 차원의 후보만 남깁니다. 다른 모델 설정을 섞으면 `model_scoped` 가 더
+        # 구체적이라는 이유로 그 값이 이겨, 모델 미지정 조회에 엉뚱한 한도가 나옵니다
+        # (팀 전체 600 인데 claude-x 전용 50 이 기본값처럼 보이는 상태).
+        team_configs = self._for_dimension(
+            await repo.list_configs(scope=RateLimitScope.TEAM, scope_id=team_id), model_alias
+        )
         team_config = self._pick_for_alias(team_configs, model_alias)
         team_resolution = policy.resolve([_to_candidate(c) for c in team_configs])
 
         members = await UserRepository(session).list_by_team(team_id)
-        member_configs = await repo.list_configs(
-            scope=RateLimitScope.USER, scope_ids=[member.id for member in members]
+        member_configs = self._for_dimension(
+            await repo.list_configs(
+                scope=RateLimitScope.USER, scope_ids=[member.id for member in members]
+            ),
+            model_alias,
         )
         by_user: dict[uuid.UUID, list[RateLimitConfig]] = {}
         for config in member_configs:
@@ -515,11 +530,25 @@ class RateLimitService:
             key = await VirtualKeyRepository(session).get(virtual_key_id)
             if key is None:
                 raise NotFoundError("VirtualKey", str(virtual_key_id))
-            resolved_user = user_id or (
-                key.owner_id if key.owner_type == VKOwnerType.USER else None
-            )
-            self._require_can_view(actor, resolved_user, key.team_id)
-            return resolved_user, key.id, key.team_id
+
+            # 사용자 축은 **키가 말하는 소유자**로만 정합니다. 호출자가 준 user_id 를 그대로
+            # 믿으면 두 가지가 깨집니다.
+            #   1) 인가 — 자기 user_id 와 남의 key_id 를 섞어 보내면 소유권 검사가 자기
+            #      자신으로 통과해 다른 팀 키의 정책까지 보입니다.
+            #   2) 정확성 — 실제로 존재하지 않는 (사용자, 키) 조합의 정책 계층을 계산하게 됩니다.
+            owner_user_id = key.owner_id if key.owner_type == VKOwnerType.USER else None
+            if user_id is not None and user_id != owner_user_id:
+                raise ValidationError(
+                    "virtual_key_id 의 실제 소유자와 user_id 가 일치하지 않습니다",
+                    code="subject_mismatch",
+                    details={
+                        "virtual_key_id": str(key.id),
+                        "owner_user_id": str(owner_user_id) if owner_user_id else None,
+                    },
+                )
+
+            self._require_can_view_key(actor, owner_user_id, key.team_id)
+            return owner_user_id, key.id, key.team_id
 
         if user_id is not None:
             user = await UserRepository(session).get(user_id)
@@ -530,6 +559,26 @@ class RateLimitService:
 
         # 대상을 지정하지 않으면 자기 자신입니다.
         return actor.user_id, None, actor.team_id
+
+    @staticmethod
+    def _require_can_view_key(
+        actor: CurrentAdmin, owner_user_id: uuid.UUID | None, team_id: uuid.UUID | None
+    ) -> None:
+        """VK 조회 인가.
+
+        `_require_can_view` 와 달리 소유권을 **키가 말하는 소유자**와 비교합니다. 호출자가
+        보낸 id 로 비교하면 자기 id 를 넣는 것만으로 아무 키나 열립니다.
+
+        `TEAM` 소유 키는 사람에 귀속되지 않으므로 ADMIN 과 그 팀 팀장만 봅니다.
+        """
+        if actor.is_admin:
+            return
+        if owner_user_id is not None and actor.user_id == owner_user_id:
+            return
+        if actor.role == UserRole.TEAM_LEADER:
+            ensure_team_scope(actor, team_id)
+            return
+        raise ForbiddenError("본인 소유 키 또는 상위 권한자만 조회할 수 있습니다")
 
     @staticmethod
     def _require_can_view(
@@ -548,6 +597,18 @@ class RateLimitService:
         members = await UserRepository(session).list_by_team(actor.team_id)
         keys = await VirtualKeyRepository(session).list_live_for_team(actor.team_id)
         return {actor.team_id, *(m.id for m in members), *(k.id for k in keys)}
+
+    @staticmethod
+    def _for_dimension(
+        configs: list[RateLimitConfig], model_alias: str | None
+    ) -> list[RateLimitConfig]:
+        """요청한 모델 차원의 후보만 남깁니다.
+
+        `model_alias` 를 주면 그 모델 행과 전체(NULL) 행이, 주지 않으면 **전체 행만**
+        후보입니다. 다른 모델 설정이 섞이면 그것이 더 구체적이라 해석에서 이겨 버립니다.
+        `RateLimitRepository.list_for_subject` 가 SQL 로 하는 일과 같은 규칙입니다.
+        """
+        return [c for c in configs if c.model_alias is None or c.model_alias == model_alias]
 
     @staticmethod
     def _pick_for_alias(

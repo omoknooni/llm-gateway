@@ -25,7 +25,7 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M5 모델 카탈로그 | 완료 |
 | M6 예산 | 완료 (리뷰 P1 3건 반영 + 통합 테스트 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
 | M7 사용량 집계·조회 | 완료 (리뷰 P1·P2 4건 반영 — [review/M7_usage_aggregation/response.md](review/M7_usage_aggregation/response.md)) |
-| M8 rate limit | 완료 (`/rate-limits/usage` 는 gateway 카운터 규약 확정 대기 — 06 문서) |
+| M8 rate limit | 완료 (리뷰 3건 반영 — [review/M8_rate_limit/response.md](review/M8_rate_limit/response.md)). `/rate-limits/usage` 는 gateway 카운터 규약 확정 대기 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
 **검증 상태**: `backend/docker-compose.test.yml` + `scripts/test-stack.sh` 로 PostgreSQL·Redis 를
@@ -195,6 +195,8 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 - 허용 모델 3층 해석에서 **"행 0개"의 의미가 층마다 다른 것** (04)
 - rate limit **한도 종류별 폴백** 과 GLOBAL 별도 축 (06)
 - rate limit 에는 **합계 불변식이 없는 것** — 각 하위를 상위와 개별 비교 (06)
+- 조회의 **모델 차원 격리** — 모델 미지정 조회에 모델 전용 설정이 섞이지 않는 것 (06)
+- `effective` 의 사용자 축은 **키가 말하는 소유자**로만 정해지는 것 (06)
 - 예산 **UTC 월 경계** — 특히 KST 기준 월초/월말 (05). 사용량 일 버킷도 같은 기준 (10)
 - 집계의 **멱등성**과 `user_id` NULL → 예약 UUID 매핑 (10)
 - 사용량 조회의 **인가 범위 축소** — 다른 팀·다른 사람은 빈 결과가 아니라 403 (00·10)

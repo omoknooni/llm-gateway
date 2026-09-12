@@ -554,3 +554,241 @@ async def test_usage_reports_unavailable_without_breaking(db_session, cache_mgr,
     assert result.available is False
     assert result.reason
     assert result.entries == []
+
+
+# ── 리뷰 회귀 (M8 review) ──
+
+
+async def test_tree_without_alias_ignores_model_scoped_configs(db_session, cache_mgr, ctx):
+    """모델 미지정 조회에 모델 전용 설정이 섞이면 안 됩니다(리뷰 P1).
+
+    `claude-x` 전용 50 이 팀 전체 600 을 덮으면, 화면이 "이 팀의 기본 한도는 50" 이라고
+    잘못 말하고 상위 초과 판단도 그 잘못된 기준으로 이뤄집니다.
+    """
+    team_id, admin_id, member_id, actor = await _fixtures(db_session)
+    await seed_model(db_session, admin_id, "claude-x")
+    service = RateLimitService(cache_mgr)
+
+    await service.set_limit(
+        db_session,
+        scope=RateLimitScope.TEAM,
+        scope_id=team_id,
+        model_alias=None,
+        data=RateLimitSetRequest(rpm_limit=600),
+        actor=actor,
+        ctx=ctx,
+    )
+    await service.set_limit(
+        db_session,
+        scope=RateLimitScope.TEAM,
+        scope_id=team_id,
+        model_alias="claude-x",
+        data=RateLimitSetRequest(rpm_limit=50),
+        actor=actor,
+        ctx=ctx,
+    )
+
+    tree = await service.tree(db_session, team_id=team_id, model_alias=None, actor=actor)
+
+    assert tree.team_limits.rpm_limit == 600
+    assert tree.team_limits.model_alias is None
+    by_user = {m.user_id: m for m in tree.members}
+    assert by_user[str(member_id)].effective_limits["rpm_limit"].value == 600
+    assert by_user[str(member_id)].effective_limits["rpm_limit"].resolved_from == "TEAM"
+
+
+async def test_tree_with_alias_prefers_that_model(db_session, cache_mgr, ctx):
+    """반대로 모델을 지정하면 그 모델 설정이 전체 설정을 이깁니다."""
+    team_id, admin_id, member_id, actor = await _fixtures(db_session)
+    await seed_model(db_session, admin_id, "claude-x")
+    service = RateLimitService(cache_mgr)
+
+    for alias, rpm in ((None, 600), ("claude-x", 50)):
+        await service.set_limit(
+            db_session,
+            scope=RateLimitScope.TEAM,
+            scope_id=team_id,
+            model_alias=alias,
+            data=RateLimitSetRequest(rpm_limit=rpm),
+            actor=actor,
+            ctx=ctx,
+        )
+
+    tree = await service.tree(db_session, team_id=team_id, model_alias="claude-x", actor=actor)
+
+    assert tree.team_limits.rpm_limit == 50
+    by_user = {m.user_id: m for m in tree.members}
+    assert by_user[str(member_id)].effective_limits["rpm_limit"].value == 50
+    assert by_user[str(member_id)].effective_limits["rpm_limit"].resolved_from == "TEAM:model"
+
+
+async def test_tree_badge_uses_same_model_dimension(db_session, cache_mgr, ctx):
+    """상위 초과 배지도 같은 차원으로 판단해야 합니다.
+
+    다른 모델의 낮은 팀 한도를 기준으로 삼으면 정상 설정에 초과 배지가 붙습니다.
+    """
+    team_id, admin_id, member_id, actor = await _fixtures(db_session)
+    await seed_model(db_session, admin_id, "claude-x")
+    service = RateLimitService(cache_mgr)
+
+    await service.set_limit(
+        db_session,
+        scope=RateLimitScope.TEAM,
+        scope_id=team_id,
+        model_alias=None,
+        data=RateLimitSetRequest(rpm_limit=600),
+        actor=actor,
+        ctx=ctx,
+    )
+    await service.set_limit(
+        db_session,
+        scope=RateLimitScope.TEAM,
+        scope_id=team_id,
+        model_alias="claude-x",
+        data=RateLimitSetRequest(rpm_limit=50),
+        actor=actor,
+        ctx=ctx,
+    )
+    await service.set_limit(
+        db_session,
+        scope=RateLimitScope.USER,
+        scope_id=member_id,
+        model_alias=None,
+        data=RateLimitSetRequest(rpm_limit=500),
+        actor=actor,
+        ctx=ctx,
+    )
+
+    tree = await service.tree(db_session, team_id=team_id, model_alias=None, actor=actor)
+    member = next(m for m in tree.members if m.user_id == str(member_id))
+
+    # 500 ≤ 600 이므로 초과가 아닙니다. claude-x 의 50 을 기준으로 삼으면 초과로 잘못 뜹니다.
+    assert member.own.rpm_limit == 500
+    assert member.own.exceeds_parent is False
+
+
+async def test_effective_rejects_mismatched_user_and_key(db_session, cache_mgr, ctx):
+    """키의 실제 소유자와 다른 `user_id` 조합은 거절합니다(리뷰 P1).
+
+    존재하지 않는 (사용자, 키) 조합의 정책 계층을 계산하면 화면이 실제와 다른 한도를
+    보여줍니다.
+    """
+    from app.core.exceptions import ValidationError
+
+    team_id, admin_id, member_id, actor = await _fixtures(db_session)
+    other_member = await seed_user(db_session, team_id, display_name="other")
+    key_id = await seed_virtual_key(
+        db_session, team_id=team_id, owner_id=member_id, created_by=admin_id
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        await RateLimitService(cache_mgr).effective(
+            db_session,
+            user_id=other_member,
+            virtual_key_id=key_id,
+            model_alias=None,
+            actor=actor,
+        )
+    assert exc.value.code == "subject_mismatch"
+
+
+async def test_member_cannot_read_another_members_key_policy(db_session, cache_mgr, ctx):
+    """자기 user_id + 남의 key_id 조합으로 소유권 검사를 통과할 수 없어야 합니다(리뷰 P1)."""
+    from app.core.auth import CurrentAdmin
+
+    team_id, admin_id, owner_id, _ = await _fixtures(db_session)
+    intruder_id = await seed_user(db_session, team_id, display_name="intruder")
+    key_id = await seed_virtual_key(
+        db_session, team_id=team_id, owner_id=owner_id, created_by=admin_id
+    )
+
+    intruder = CurrentAdmin(
+        user_id=intruder_id,
+        email="intruder@example.com",
+        role=UserRole.MEMBER,
+        team_id=team_id,
+    )
+
+    # 자기 id 를 함께 보내도 통과하지 못합니다. 조합이 실제와 다르므로 인가 판정 **이전에**
+    # 거절됩니다 — 소유권은 호출자가 준 id 가 아니라 키가 말하는 소유자로 판정합니다.
+    from app.core.exceptions import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        await RateLimitService(cache_mgr).effective(
+            db_session,
+            user_id=intruder_id,
+            virtual_key_id=key_id,
+            model_alias=None,
+            actor=intruder,
+        )
+    assert exc.value.code == "subject_mismatch"
+
+    # user_id 를 빼도 마찬가지입니다.
+    with pytest.raises(ForbiddenError):
+        await RateLimitService(cache_mgr).effective(
+            db_session, user_id=None, virtual_key_id=key_id, model_alias=None, actor=intruder
+        )
+
+
+async def test_key_owner_can_read_own_key_policy(db_session, cache_mgr, ctx):
+    """소유자 본인은 볼 수 있습니다 — 막는 것은 조합 위조이지 본인 조회가 아닙니다."""
+    from app.core.auth import CurrentAdmin
+
+    team_id, admin_id, owner_id, _ = await _fixtures(db_session)
+    key_id = await seed_virtual_key(
+        db_session, team_id=team_id, owner_id=owner_id, created_by=admin_id
+    )
+    owner = CurrentAdmin(
+        user_id=owner_id, email="owner@example.com", role=UserRole.MEMBER, team_id=team_id
+    )
+
+    result = await RateLimitService(cache_mgr).effective(
+        db_session, user_id=None, virtual_key_id=key_id, model_alias=None, actor=owner
+    )
+    assert result.subject["virtual_key_id"] == str(key_id)
+    assert result.subject["user_id"] == str(owner_id)
+
+
+async def test_leader_list_applies_requested_scope_id(db_session, cache_mgr, ctx):
+    """팀장이 준 `scope_id` 가 무시되면 권한 범위 전체가 돌아옵니다(리뷰 P2)."""
+    team_id, admin_id, member_id, actor = await _fixtures(db_session)
+    other_member = await seed_user(db_session, team_id, display_name="other")
+    service = RateLimitService(cache_mgr)
+
+    for target in (member_id, other_member):
+        await service.set_limit(
+            db_session,
+            scope=RateLimitScope.USER,
+            scope_id=target,
+            model_alias=None,
+            data=RateLimitSetRequest(rpm_limit=100),
+            actor=actor,
+            ctx=ctx,
+        )
+
+    leader = leader_actor(admin_id, team_id)
+    result = await service.list_limits(
+        db_session,
+        scope=RateLimitScope.USER,
+        scope_id=member_id,
+        model_alias=None,
+        actor=leader,
+    )
+
+    assert [item.scope_id for item in result.items] == [str(member_id)]
+
+
+async def test_leader_list_rejects_out_of_scope_target(db_session, cache_mgr, ctx):
+    """권한 밖 대상은 빈 목록이 아니라 403 입니다."""
+    team_id, admin_id, _, actor = await _fixtures(db_session)
+    other_team = await seed_team(db_session, name="other-team")
+    outsider = await seed_user(db_session, other_team, display_name="outsider")
+
+    with pytest.raises(ForbiddenError):
+        await RateLimitService(cache_mgr).list_limits(
+            db_session,
+            scope=RateLimitScope.USER,
+            scope_id=outsider,
+            model_alias=None,
+            actor=leader_actor(admin_id, team_id),
+        )
