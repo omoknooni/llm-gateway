@@ -8,5 +8,7 @@ Admin Console(`frontend/`)의 설계 문서입니다. 저장소 전체 기준은
 | [00-admin-console-architecture.md](00-admin-console-architecture.md) | 경계, 레이어, 세션·인가, 데이터 페칭·에러·표시 규약 |
 | [01-screen-inventory.md](01-screen-inventory.md) | 화면 목록, 역할별 접근 권한, 화면 ↔ API 매핑 |
 | [02-implementation-roadmap.md](02-implementation-roadmap.md) | 마일스톤, 테스트 전략, 미결정 사항 |
+| [03-local-browser-verification.md](03-local-browser-verification.md) | 실행 중인 backend 를 상대로 한 브라우저 검증 기록과 남은 발견 사항 |
 
-읽는 순서는 00 → 01 → 02입니다.
+읽는 순서는 00 → 01 → 02입니다. 03은 특정 시점의 검증 기록이라 설계 문서가 아니라
+**관찰 기록**으로 읽습니다 — 설계가 바뀌면 00~02를 고치고, 03은 다시 검증할 때 새로 씁니다.
