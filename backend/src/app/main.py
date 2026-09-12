@@ -128,6 +128,7 @@ def create_app() -> FastAPI:
 
     from app.routers import (
         allowed_models,
+        budgets,
         health,
         internal,
         models,
@@ -147,6 +148,7 @@ def create_app() -> FastAPI:
     api.include_router(virtual_keys.team_router)
     api.include_router(models.router)
     api.include_router(allowed_models.router)
+    api.include_router(budgets.router)
     api.include_router(service_tokens.router)
     api.include_router(internal.router)
     app.include_router(api)

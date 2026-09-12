@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     #: 사용자 생성 시 허용할 이메일 도메인. 비어 있으면 검사하지 않습니다.
     ALLOWED_EMAIL_DOMAINS: Annotated[list[str], NoDecode] = []
 
+    # ── 예산 ──
+    #: Redis 카운터와 DB 내구 사본의 허용 차이(USD). data plane 의 UPSERT 지연분이 있어
+    #: 0 으로 두면 정상 상태에서도 경고가 쏟아집니다.
+    BUDGET_COUNTER_DRIFT_WARN_USD: float = 1.0
+
     # ── Virtual Key ──
     VIRTUAL_KEY_ENV: str = "dev"  # 키 문자열에 박히는 환경 세그먼트 (live | dev)
     VIRTUAL_KEY_MAX_TTL_DAYS: int = 365

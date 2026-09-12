@@ -56,6 +56,13 @@ class UserRepository:
         stmt = select(User).where(User.team_id == team_id).order_by(User.display_name)
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def names_for(self, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """id → 표시명. 목록 응답에 이름을 붙일 때 N+1 을 피합니다."""
+        if not user_ids:
+            return {}
+        stmt = select(User.id, User.display_name).where(User.id.in_(user_ids))
+        return {row.id: row.display_name for row in (await self._session.execute(stmt))}
+
     async def count_active_admins(self, *, excluding: uuid.UUID | None = None) -> int:
         stmt = select(func.count()).select_from(User).where(
             User.role == UserRole.ADMIN, User.is_active.is_(True)

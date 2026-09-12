@@ -23,7 +23,8 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M3 인증·인가, 팀/사용자 | 완료 |
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
-| M6~M8 | 미착수 |
+| M6 예산 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
+| M7~M8 | 미착수 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
 **미검증 항목**: 개발 환경에 PostgreSQL 이 없어 마이그레이션 실 적용과 통합 테스트를 아직
@@ -106,7 +107,15 @@ gateway 브랜치와 합의해야 하는 항목입니다. 이게 끝나야 M2 �
 - 소진값 재시드(ADMIN 전용)
 - Redis/DB 정합성 검증 job
 
-### M7 — 사용량 집계와 조회
+완료. 구현하면서 확정한 것은 [05](05-budget-management.md)의 "구현 시 확정한 것 (M6)" 표에
+있습니다. 마이그레이션은 추가하지 않았습니다 — `budget_configs`·`budget_usages` 는 `0001`
+baseline 에 이미 있습니다.
+
+남은 조건: `GET /budgets/team/{id}/usage` 의 멤버·모델 breakdown 은 `usage.monthly_usage_aggregates`
+를 읽습니다. 그 테이블을 채우는 집계 job 은 M7 이므로, **그 전까지 breakdown 은 빈 목록**입니다.
+총 소진액은 Redis 카운터 / `budget_usages` 에서 오므로 예산 화면 자체는 M7 없이 동작합니다.
+
+### M7 — 사용량 집계와 조회 (다음)
 
 - `usage.usage_events` → 일·월 집계 job
 - 팀/사용자/VK/모델 축 조회 API

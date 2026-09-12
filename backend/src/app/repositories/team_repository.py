@@ -41,6 +41,13 @@ class TeamRepository:
         stmt = select(Team).where(Team.is_active.is_(True)).order_by(Team.name)
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def names_for(self, team_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """id → 팀 이름. 목록 응답에 이름을 붙일 때 N+1 을 피합니다."""
+        if not team_ids:
+            return {}
+        stmt = select(Team.id, Team.name).where(Team.id.in_(team_ids))
+        return {row.id: row.name for row in (await self._session.execute(stmt))}
+
     async def count_active_members(self, team_id: uuid.UUID) -> int:
         stmt = select(func.count()).select_from(User).where(
             User.team_id == team_id, User.is_active.is_(True)

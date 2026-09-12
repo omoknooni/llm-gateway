@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from decimal import Decimal
+from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainSerializer
 
 T = TypeVar("T")
+
+#: 금액·비율은 문자열로 직렬화합니다(00 문서 공통 타입 규약).
+#: JSON number 로 내보내면 프론트의 IEEE754 로 옮겨지면서 정밀도가 조용히 깨집니다.
+DecimalStr = Annotated[Decimal, PlainSerializer(str, return_type=str, when_used="json")]
 
 
 class ErrorBody(BaseModel):
