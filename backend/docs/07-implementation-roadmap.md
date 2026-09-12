@@ -25,7 +25,7 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M5 모델 카탈로그 | 완료 |
 | M6 예산 | 완료 (리뷰 P1 3건 반영 + 통합 테스트 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
 | M7 사용량 집계·조회 | 완료 (리뷰 P1·P2 4건 반영 — [review/M7_usage_aggregation/response.md](review/M7_usage_aggregation/response.md)) |
-| M8 rate limit | 미착수 |
+| M8 rate limit | 완료 (`/rate-limits/usage` 는 gateway 카운터 규약 확정 대기 — 06 문서) |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
 **검증 상태**: `backend/docker-compose.test.yml` + `scripts/test-stack.sh` 로 PostgreSQL·Redis 를
@@ -147,13 +147,22 @@ baseline 에 이미 있습니다.
 M7은 gateway가 이벤트를 쓰기 시작해야 **실데이터로** 검증됩니다. 현재 검증 범위는 규칙
 단위 테스트와 오프라인 SQL 렌더링입니다.
 
-### M8 — Rate limit (06) (다음)
+### M8 — Rate limit (06)
 
 - scope별 설정 CRUD, 계층 제약 검증
 - `effective` 해석 API, 트리 조회
 - 실시간 사용률 조회(gateway 카운터 규약 확정 후)
 
+완료. 구현하면서 확정한 것은 [06](06-rate-limit-management.md)의 "구현 시 확정한 것 (M8)"
+표에 있습니다. 마이그레이션은 추가하지 않았습니다 — `rate_limit_configs` 는 `0001` baseline 에
+이미 있습니다.
+
+**`GET /rate-limits/usage` 만 값을 채우지 못합니다.** gateway 문서가 집행 카운터 키의 최종
+형태를 Phase 4 미확정으로 두고 있어(윈도 표기, cluster mode 해시태그) 키를 만들 수 없습니다.
+엔드포인트는 계약대로 `available: false` 를 돌려주므로 화면은 지금 붙일 수 있습니다.
+
 M6~M8은 저장소 전체 계획의 Phase 4에 해당하며, gateway·frontend와 병행합니다.
+**backend 몫의 Phase 1·4 마일스톤은 여기서 끝납니다.**
 
 ## Dependency Order
 
@@ -185,6 +194,7 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 
 - 허용 모델 3층 해석에서 **"행 0개"의 의미가 층마다 다른 것** (04)
 - rate limit **한도 종류별 폴백** 과 GLOBAL 별도 축 (06)
+- rate limit 에는 **합계 불변식이 없는 것** — 각 하위를 상위와 개별 비교 (06)
 - 예산 **UTC 월 경계** — 특히 KST 기준 월초/월말 (05). 사용량 일 버킷도 같은 기준 (10)
 - 집계의 **멱등성**과 `user_id` NULL → 예약 UUID 매핑 (10)
 - 사용량 조회의 **인가 범위 축소** — 다른 팀·다른 사람은 빈 결과가 아니라 403 (00·10)

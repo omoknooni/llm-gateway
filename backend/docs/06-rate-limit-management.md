@@ -104,6 +104,36 @@ scope는 네 가지입니다: `VIRTUAL_KEY`, `USER`, `TEAM`, `GLOBAL`.
 | `GET` | `/rate-limits/tree` | ADMIN / 팀장 | 팀 → 멤버 트리 + 상속 표시(화면용) |
 | `GET` | `/rate-limits/usage` | ADMIN / 팀장 | 실시간 사용률(gateway 카운터 조회, best-effort) |
 
+### 구현 시 확정한 것 (M8)
+
+문서가 규칙만 정하고 형태를 비워 둔 부분입니다. 구현하면서 확정했습니다.
+
+| 항목 | 확정 |
+|---|---|
+| 상위(parent)의 정의 | **덜 구체적인 주체 축**입니다. `USER` 의 상위는 `TEAM`, `VIRTUAL_KEY` 의 상위는 소유자(`USER`)와 `TEAM`. `TEAM` 소유 VK 는 사람에 귀속되지 않으므로 상위가 `TEAM` 뿐입니다 |
+| `GLOBAL` 은 상위가 아님 | 별도 축이라 주체 한도가 `GLOBAL` 보다 커도 모순이 아닙니다. 둘 다 집행됩니다 |
+| 합계 불변식 없음 | rate limit 은 **속도**라 하위끼리 더해지지 않습니다. 600 rpm 팀에 400 rpm 멤버가 둘 있어도 위반이 아닙니다 — 예산(월 총량)과 규칙이 다릅니다 |
+| 팀 한도 변경 권한 | `TEAM` scope 설정은 **ADMIN 만**입니다. 팀장은 그 안에서 멤버·VK 한도만 다룹니다 |
+| `conflicting_children` 범위 | 같은 모델 차원의 직속 하위만 봅니다(`TEAM` → 멤버, `USER` → 그 사용자 소유 VK) |
+| `exceeds_parent` | 목록 조회는 행마다 상위를 해석하지 않으므로 **`null` = 계산 안 함**입니다. 배지가 필요한 화면은 `/tree` 나 `/effective` 를 씁니다 |
+| 동시 upsert | 대상 단위 트랜잭션 advisory lock. 막는 것은 write skew 가 아니라 **쓰기 충돌**입니다 — 아래 참조 |
+| `DELETE` 경로의 GLOBAL | 대상이 없으므로 `scope_id` 자리에 `global` 을 씁니다. 경로 형태를 scope 마다 다르게 두지 않기 위한 자리표시자입니다 |
+| 목록 조회의 GLOBAL | 팀장에게도 보여줍니다. 자기 한도가 왜 그런지 설명하려면 전역 축이 보여야 합니다 |
+
+### 동시 쓰기
+
+예산과 **다른 이유로** 직렬화합니다.
+
+예산의 배분은 "합계 ≤ 팀 한도"라는 집계 불변식이 있어, 읽는 행과 쓰는 행이 달라 write skew 가
+생깁니다. rate limit 에는 그런 불변식이 없습니다 — 각 하위를 상위와 **개별 비교**할 뿐입니다.
+
+여기서 막는 것은 **upsert 경합**입니다. 설정 행이 아직 없을 때 `SELECT ... FOR UPDATE` 는
+잠글 대상이 없으므로, 같은 `(scope, scope_id, model_alias)` 에 대한 두 요청이 동시에 INSERT 하면
+부분 unique index `uq_rate_limit_active` 에서 하나가 터집니다. 대상 단위
+`pg_advisory_xact_lock` 으로 직렬화하면 뒤의 요청이 UPDATE 경로로 들어옵니다.
+
+`GLOBAL` 은 팀이 없으므로 예약 키(nil UUID)를 잠금 대상으로 씁니다.
+
 ### 설정 예시
 
 ```http
@@ -135,6 +165,14 @@ PUT /api/v1/rate-limits/team/9f2c...?model_alias=claude-sonnet-4
   설정 화면은 정상 동작합니다. 관측 기능이 관리 기능을 막으면 안 됩니다.
 - 카운터 키 구조와 윈도 정의는 gateway 소유이므로, 이 엔드포인트는 gateway의 키 규약이
   확정된 뒤에 구현합니다(Phase 4).
+
+**현재 상태(M8)**: 엔드포인트는 있고 **항상 `available: false`** 입니다. gateway 문서가
+카운터 키의 최종 형태를 Phase 4 미확정으로 두고 있어(윈도 표기, ElastiCache cluster mode용
+해시태그 `{}`) 키를 만들 수 없습니다. 형태를 추측해 구현하면 합의되지 않은 계약을 만들게 됩니다.
+
+엔드포인트를 미리 두는 이유는 이 응답 형태가 **불가용을 정상 상태로 다루도록** 설계돼 있기
+때문입니다. 화면은 지금 붙여도 깨지지 않고, 규약이 확정되면
+`RateLimitService.usage()` 한 곳에서 카운터를 읽으면 됩니다.
 
 ## Enforcement Contract **[공유 계약]**
 

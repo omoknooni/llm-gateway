@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import enum
 import uuid
 import zlib
 from collections.abc import AsyncIterator
@@ -21,8 +22,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
 
-#: 두 정수 형식 advisory lock 의 앞 정수. 다른 애플리케이션·다른 용도와 섞이지 않게 합니다.
-_NAMESPACE_BUDGET_TEAM = 0x4C4C4D31
+class TeamLock(enum.IntEnum):
+    """팀 단위 직렬화의 용도.
+
+    두 정수 형식 advisory lock 의 **앞 정수**로 쓰입니다. 용도를 나누는 이유는 예산 배분과
+    rate limit 쓰기가 서로 다른 문제를 막기 때문입니다 — 한 네임스페이스를 공유하면
+    관계없는 두 작업이 서로를 기다립니다.
+    """
+
+    BUDGET = 0x4C4C4D31
+    RATE_LIMIT = 0x4C4C4D32
 
 
 def _lock_key(name: str) -> int:
@@ -53,8 +62,8 @@ async def advisory_lock(session: AsyncSession, name: str) -> AsyncIterator[bool]
             await session.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
 
 
-async def lock_team_budget(session: AsyncSession, team_id: uuid.UUID) -> None:
-    """팀 예산 변경을 직렬화합니다. 커밋/롤백까지 유지됩니다.
+async def lock_team(session: AsyncSession, team_id: uuid.UUID, purpose: TeamLock) -> None:
+    """팀 단위 정책 쓰기를 직렬화합니다. 커밋/롤백까지 유지됩니다.
 
     **행 잠금으로는 부족합니다.** 팀 예산 한도와 사용자 예산은 서로 다른 행이라,
     "현재 배분 합계를 읽고 → 다른 사용자 행을 INSERT" 하는 두 요청이 충돌 없이 둘 다
@@ -63,8 +72,13 @@ async def lock_team_budget(session: AsyncSession, team_id: uuid.UUID) -> None:
 
     그래서 **팀 id 를 키로 한 advisory lock** 으로 묶습니다. 같은 팀의 예산 쓰기가 전부 이
     잠금을 지나면 합계 검증과 삽입이 원자적으로 보입니다.
+
+    rate limit 은 사정이 다릅니다. 규칙이 "각 하위 ≤ 상위"이고 하위끼리 더해지지 않아
+    **합계 불변식이 없습니다.** 거기서 이 잠금이 막는 것은 write skew 가 아니라 **upsert
+    경합**입니다 — 행이 없을 때는 `FOR UPDATE` 로 잠글 대상이 없어, 같은 조합에 대한 두
+    INSERT 가 부분 unique index 에서 충돌합니다.
     """
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:ns, :key)"),
-        {"ns": _NAMESPACE_BUDGET_TEAM, "key": _uuid_key(team_id)},
+        {"ns": int(purpose), "key": _uuid_key(team_id)},
     )

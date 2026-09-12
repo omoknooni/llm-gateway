@@ -19,7 +19,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.core import cache_keys
 from app.core.clock import month_period
-from app.core.locks import _uuid_key, lock_team_budget
+from app.core.locks import TeamLock, _uuid_key, lock_team
 from app.models.budget import BudgetConfig
 from app.models.enums import BudgetPolicy, BudgetScope
 from app.policy import budget as policy
@@ -406,7 +406,7 @@ async def test_team_budget_lock_is_transaction_scoped():
     충돌 없이 둘 다 커밋됩니다. 팀 예산 행이 아직 없으면 잠글 행 자체도 없습니다.
     """
     session = _RecordingSession()
-    await lock_team_budget(session, uuid.uuid4())
+    await lock_team(session, uuid.uuid4(), TeamLock.BUDGET)
 
     sql, params = session.statements[0]
     assert "pg_advisory_xact_lock" in sql

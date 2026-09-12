@@ -34,7 +34,7 @@ from app.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
-from app.core.locks import lock_team_budget
+from app.core.locks import TeamLock, lock_team
 from app.models.auth import Team, User
 from app.models.budget import BudgetConfig
 from app.models.enums import BudgetPolicy, BudgetScope, UserRole
@@ -185,7 +185,7 @@ class BudgetService:
         ctx: RequestContext,
     ) -> BudgetConfigResponse:
         await self._require_team(session, team_id)
-        await lock_team_budget(session, team_id)
+        await lock_team(session, team_id, TeamLock.BUDGET)
 
         allocated = await self._allocated_total(session, team_id)
         if allocated > data.limit_usd:
@@ -261,7 +261,7 @@ class BudgetService:
         user = await self._require_user(session, user_id)
         self._ensure_can_manage_user_budget(actor, user)
         if user.team_id is not None:
-            await lock_team_budget(session, user.team_id)
+            await lock_team(session, user.team_id, TeamLock.BUDGET)
         await self._ensure_within_team_limit(session, user, new_limit=data.limit_usd)
 
         before, config = await self._upsert_config(
@@ -376,7 +376,7 @@ class BudgetService:
         """
         await self._require_team(session, team_id)
         ensure_team_scope(actor, team_id)
-        await lock_team_budget(session, team_id)
+        await lock_team(session, team_id, TeamLock.BUDGET)
 
         config_repo = BudgetConfigRepository(session)
         team_config = await config_repo.get_active(BudgetScope.TEAM, team_id)
@@ -782,7 +782,7 @@ class BudgetService:
         하위가 상위를 우회할 수 없어야 한다는 규칙은 ADMIN 에게도 적용됩니다(00 문서).
         예외를 두면 "화면에는 합계 120, 한도 100"인 상태가 생깁니다.
 
-        **호출 전에 `lock_team_budget` 이 잡혀 있어야 합니다.** 잠금 없이 부르면 두 요청이
+        **호출 전에 `lock_team(..., TeamLock.BUDGET)` 이 잡혀 있어야 합니다.** 잠금 없이 부르면 두 요청이
         같은 합계를 읽고 각자 다른 사용자 행을 넣어 둘 다 통과합니다(write skew).
         """
         if user.team_id is None:
