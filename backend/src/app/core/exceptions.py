@@ -54,3 +54,14 @@ class ConflictError(AppError):
 
 class InvalidStateTransitionError(ConflictError):
     code = "invalid_state_transition"
+
+
+class CounterWriteError(AppError):
+    """집행 카운터(Redis)를 갱신하지 못했습니다.
+
+    503 인 이유는 요청이 잘못된 것이 아니라 의존 저장소가 응답하지 않은 것이기 때문입니다.
+    호출자가 그대로 재시도하면 됩니다 — 재시드는 멱등합니다.
+    """
+
+    status_code = 503
+    code = "counter_write_failed"

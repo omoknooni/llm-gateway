@@ -19,6 +19,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.core import cache_keys
 from app.core.clock import month_period
+from app.core.locks import _uuid_key, lock_team_budget
 from app.models.budget import BudgetConfig
 from app.models.enums import BudgetPolicy, BudgetScope
 from app.policy import budget as policy
@@ -28,6 +29,7 @@ from app.services.budget_service import (
     SOURCE_DB,
     SOURCE_MIXED,
     SOURCE_REDIS,
+    BudgetService,
     ResolvedUsage,
     UsageReader,
     _build_item,
@@ -351,3 +353,128 @@ async def test_read_counters_survives_redis_failure():
     reader = UsageReader(_FakeRedis(ConnectionError("redis down")), session=None)
 
     assert await reader.read_counters(BudgetScope.TEAM, [uuid.uuid4()], "2026-09") == {}
+
+
+# ── 리뷰 회귀 (M6 review P1) ──
+
+
+@pytest.mark.parametrize("value", ["0.00005", "1.23456", "12345678901.0000"])
+def test_money_beyond_db_precision_is_rejected(value):
+    """DB 열이 `numeric(14,4)` 입니다.
+
+    입력에 같은 제약이 없으면 PostgreSQL 은 반올림해 저장하고 Redis 카운터 문자열은
+    `quantize()` 로 잘려, **내구 사본과 집행 카운터가 달라집니다.**
+    """
+    with pytest.raises(PydanticValidationError):
+        BudgetSetRequest(limit_usd=value)
+
+
+def test_money_at_db_precision_is_accepted():
+    assert BudgetSetRequest(limit_usd="1234567890.1234").limit_usd == _d("1234567890.1234")
+
+
+def test_reseed_amount_beyond_db_precision_is_rejected():
+    item = {"scope": "TEAM", "scope_id": str(uuid.uuid4()), "period": "2026-09", "used_usd": "0.00005"}
+    with pytest.raises(PydanticValidationError):
+        ReseedRequest(items=[item], reason="복구")
+
+
+def test_allocation_amount_beyond_db_precision_is_rejected():
+    with pytest.raises(PydanticValidationError):
+        AllocationSetRequest(allocations=[{"user_id": str(uuid.uuid4()), "limit_usd": "0.00005"}])
+
+
+class _FakeResult:
+    @staticmethod
+    def scalar():
+        return True
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.statements: list[tuple[str, dict]] = []
+
+    async def execute(self, statement, params=None):
+        self.statements.append((str(statement), params or {}))
+        return _FakeResult()
+
+
+async def test_team_budget_lock_is_transaction_scoped():
+    """행 잠금으로는 write skew 를 막지 못합니다.
+
+    팀 한도와 사용자 예산은 다른 행이라 "합계를 읽고 → 다른 사용자 행 INSERT" 하는 두 요청이
+    충돌 없이 둘 다 커밋됩니다. 팀 예산 행이 아직 없으면 잠글 행 자체도 없습니다.
+    """
+    session = _RecordingSession()
+    await lock_team_budget(session, uuid.uuid4())
+
+    sql, params = session.statements[0]
+    assert "pg_advisory_xact_lock" in sql
+    # 트랜잭션 스코프라 커밋/롤백에 자동으로 풀립니다 — 해제를 잊을 수 없습니다.
+    assert "pg_advisory_unlock" not in sql
+    assert set(params) == {"ns", "key"}
+
+
+def test_team_lock_key_is_deterministic_and_int4():
+    team_id = uuid.uuid4()
+    key = _uuid_key(team_id)
+    assert key == _uuid_key(team_id)
+    assert -(2**31) <= key < 2**31
+
+
+class _FakePipeline:
+    def __init__(self, fail: bool) -> None:
+        self._fail = fail
+        self.commands: list[tuple[str, str]] = []
+        self.executed = False
+
+    def set(self, key: str, value: str):
+        self.commands.append((key, value))
+        return self
+
+    async def execute(self):
+        self.executed = True
+        if self._fail:
+            raise ConnectionError("redis down")
+        return [True] * len(self.commands)
+
+
+class _PipelineRedis:
+    def __init__(self, fail: bool = False) -> None:
+        self.pipeline_obj = _FakePipeline(fail)
+        self.transaction_requested: bool | None = None
+
+    def pipeline(self, transaction: bool = False):
+        self.transaction_requested = transaction
+        return self.pipeline_obj
+
+
+def _service(redis) -> BudgetService:
+    return BudgetService(cache_mgr=None, redis=redis)
+
+
+async def test_counter_writes_go_in_one_transaction_pipeline():
+    """항목별로 나눠 쓰면 중간 실패가 일부만 바뀐 상태를 남깁니다 — 고치려던 상태보다 나쁩니다."""
+    redis = _PipelineRedis()
+    items = [
+        (BudgetScope.TEAM, uuid.uuid4(), "2026-09", _d("812.43")),
+        (BudgetScope.USER, uuid.uuid4(), "2026-09", _d("1E+2")),
+    ]
+
+    assert await _service(redis)._write_counters(items) is True
+    assert redis.transaction_requested is True
+    assert redis.pipeline_obj.executed
+    assert [value for _, value in redis.pipeline_obj.commands] == ["812.4300", "100.0000"]
+
+
+async def test_counter_write_failure_is_reported_not_swallowed():
+    """실패를 삼키면 DB 만 갱신되고 gateway 는 옛 값으로 계속 집행합니다."""
+    assert await _service(_PipelineRedis(fail=True))._write_counters(
+        [(BudgetScope.TEAM, uuid.uuid4(), "2026-09", _d("1"))]
+    ) is False
+
+
+async def test_empty_counter_write_is_noop():
+    redis = _PipelineRedis()
+    assert await _service(redis)._write_counters([]) is True
+    assert redis.transaction_requested is None

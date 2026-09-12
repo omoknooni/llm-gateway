@@ -27,7 +27,14 @@ from app.core.auth import CurrentAdmin, ensure_team_scope
 from app.core.cache_invalidation import CacheInvalidationManager
 from app.core.clock import month_period, utcnow
 from app.core.deps import RequestContext
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from app.core.exceptions import (
+    ConflictError,
+    CounterWriteError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+from app.core.locks import lock_team_budget
 from app.models.auth import Team, User
 from app.models.budget import BudgetConfig
 from app.models.enums import BudgetPolicy, BudgetScope, UserRole
@@ -178,6 +185,7 @@ class BudgetService:
         ctx: RequestContext,
     ) -> BudgetConfigResponse:
         await self._require_team(session, team_id)
+        await lock_team_budget(session, team_id)
 
         allocated = await self._allocated_total(session, team_id)
         if allocated > data.limit_usd:
@@ -214,7 +222,11 @@ class BudgetService:
     async def clear_team_budget(
         self, session: AsyncSession, *, team_id: uuid.UUID, actor: CurrentAdmin, ctx: RequestContext
     ) -> None:
-        """해제 = 무제한. 새 행을 만들지 않고 활성 행을 닫습니다."""
+        """해제 = 무제한. 새 행을 만들지 않고 활성 행을 닫습니다.
+
+        팀 잠금을 잡지 않습니다. 해제는 제약을 **없애는** 방향이라 동시 실행이 배분 불변식
+        (사용자 합계 ≤ 팀 한도)을 깰 수 없습니다.
+        """
         await self._require_team(session, team_id)
         config = await BudgetConfigRepository(session).get_active(
             BudgetScope.TEAM, team_id, for_update=True
@@ -248,6 +260,8 @@ class BudgetService:
     ) -> BudgetConfigResponse:
         user = await self._require_user(session, user_id)
         self._ensure_can_manage_user_budget(actor, user)
+        if user.team_id is not None:
+            await lock_team_budget(session, user.team_id)
         await self._ensure_within_team_limit(session, user, new_limit=data.limit_usd)
 
         before, config = await self._upsert_config(
@@ -272,6 +286,7 @@ class BudgetService:
     async def clear_user_budget(
         self, session: AsyncSession, *, user_id: uuid.UUID, actor: CurrentAdmin, ctx: RequestContext
     ) -> None:
+        """배분 해제. 합계를 **줄이는** 방향이라 팀 잠금이 필요 없습니다."""
         user = await self._require_user(session, user_id)
         self._ensure_can_manage_user_budget(actor, user)
 
@@ -361,6 +376,7 @@ class BudgetService:
         """
         await self._require_team(session, team_id)
         ensure_team_scope(actor, team_id)
+        await lock_team_budget(session, team_id)
 
         config_repo = BudgetConfigRepository(session)
         team_config = await config_repo.get_active(BudgetScope.TEAM, team_id)
@@ -591,8 +607,18 @@ class BudgetService:
         control plane 이 집행 카운터를 쓰는 **유일한 경로**입니다. 자동 경로가 아니라 사람이
         명시적으로 호출하는 복구 도구이기 때문에 허용합니다(05 문서).
 
-        Redis 와 DB 를 함께 갱신합니다. 한쪽만 고치면 다음 요청에서 되돌아갑니다. DB 를 먼저
-        커밋하고 카운터를 덮어씁니다 — 순서가 반대면 커밋 실패 시 카운터만 조작된 채 남습니다.
+        Redis 와 DB 를 함께 갱신합니다. 두 저장소에 걸친 갱신이라 원자적으로 만들 수는 없고,
+        **실패했을 때 어느 쪽이 남는지**를 고를 수 있을 뿐입니다. 순서는
+
+        1. DB 변경을 트랜잭션에 쌓습니다(커밋하지 않음).
+        2. 카운터 전체를 **파이프라인 한 번**으로 씁니다. 실패하면 트랜잭션을 되돌리고
+           503 으로 거절합니다 — 아무것도 바뀌지 않습니다.
+        3. 커밋합니다.
+
+        커밋이 실패하면 카운터만 새 값으로 남습니다. 이쪽이 덜 나쁩니다 — 집행은 운영자가
+        의도한 값을 쓰게 되고, 어긋난 내구 사본은 `verify_budget_counters` 가 drift 로
+        잡아냅니다. 반대 순서(커밋 먼저)는 Redis 가 실패했을 때 **집행이 옛 값을 계속 쓰는
+        상태**가 조용히 남습니다.
         """
         usage_repo = BudgetUsageRepository(session)
         config_repo = BudgetConfigRepository(session)
@@ -633,21 +659,31 @@ class BudgetService:
                 ip_address=ctx.ip_address,
                 request_id=ctx.request_id,
             )
-        await session.commit()
+        await session.flush()
 
-        items = []
-        for scope, scope_id, period, before, after in results:
-            items.append(
+        written = await self._write_counters(
+            [(scope, scope_id, period, after) for scope, scope_id, period, _, after in results]
+        )
+        if not written:
+            await session.rollback()
+            raise CounterWriteError(
+                "집행 카운터를 갱신하지 못해 재시드를 취소했습니다",
+                details={"items": len(results)},
+            )
+
+        await session.commit()
+        return ReseedResponse(
+            items=[
                 ReseedResultItem(
                     scope=scope,
                     scope_id=str(scope_id),
                     period=period,
                     before_usd=before,
                     after_usd=after,
-                    counter_updated=await self._write_counter(scope, scope_id, period, after),
                 )
-            )
-        return ReseedResponse(items=items)
+                for scope, scope_id, period, before, after in results
+            ]
+        )
 
     # ── 내부 ──
 
@@ -745,6 +781,9 @@ class BudgetService:
 
         하위가 상위를 우회할 수 없어야 한다는 규칙은 ADMIN 에게도 적용됩니다(00 문서).
         예외를 두면 "화면에는 합계 120, 한도 100"인 상태가 생깁니다.
+
+        **호출 전에 `lock_team_budget` 이 잡혀 있어야 합니다.** 잠금 없이 부르면 두 요청이
+        같은 합계를 읽고 각자 다른 사용자 행을 넣어 둘 다 통과합니다(write skew).
         """
         if user.team_id is None:
             return
@@ -827,19 +866,29 @@ class BudgetService:
     async def _user_names(session: AsyncSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
         return await UserRepository(session).names_for(user_ids)
 
-    async def _write_counter(
-        self, scope: BudgetScope, scope_id: uuid.UUID, period: str, value: Decimal
+    async def _write_counters(
+        self, items: list[tuple[BudgetScope, uuid.UUID, str, Decimal]]
     ) -> bool:
         """집행 카운터를 덮어씁니다. **재시드에서만** 호출합니다.
 
+        전부 한 파이프라인(MULTI/EXEC)으로 보냅니다. 항목별로 나눠 쓰면 중간에 실패했을 때
+        일부 카운터만 바뀐 상태가 남고, 그건 재시드가 고치려던 상태보다 나쁩니다.
+
         `INCRBYFLOAT` 가 읽을 수 있도록 지수 표기 없는 10진 문자열로 씁니다.
         """
-        key = cache_keys.budget_usage_counter(scope.value, scope_id, period)
+        if not items:
+            return True
         try:
-            await self._redis.set(key, policy.counter_value(value))
+            pipeline = self._redis.pipeline(transaction=True)
+            for scope, scope_id, period, value in items:
+                pipeline.set(
+                    cache_keys.budget_usage_counter(scope.value, scope_id, period),
+                    policy.counter_value(value),
+                )
+            await pipeline.execute()
             return True
         except Exception as exc:
-            logger.error("budget.counter_write_failed", key=key, error=str(exc))
+            logger.error("budget.counter_write_failed", count=len(items), error=str(exc))
             return False
 
     async def _invalidate(self, keys: list[str]) -> None:

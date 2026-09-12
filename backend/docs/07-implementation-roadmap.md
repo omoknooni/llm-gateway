@@ -23,7 +23,7 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M3 인증·인가, 팀/사용자 | 완료 |
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
-| M6 예산 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
+| M6 예산 | 완료 (리뷰 P1 3건 반영 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
 | M7 사용량 집계·조회 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
 | M8 rate limit | 미착수 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
@@ -173,6 +173,8 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 - 팀 이동 시 **캐시 무효화 대상 VK 집합** (02·03)
 - 트랜잭션 커밋 **이후** 캐시 삭제 순서 (00)
 - 마지막 ADMIN 보호, 배분 합계 초과 거절 (02·05)
+- **동시 갱신에서도** 배분 합계가 팀 한도를 넘지 않는 것 — 팀 단위 advisory lock (05)
+- 금액 입력이 `numeric(14,4)` 표현 범위를 벗어나면 거절되는 것 (05)
 - 폐기·만료 키의 인증 컨텍스트 캐시가 남지 않는 것 (03)
 
 통합 테스트는 SQLite로 대체하지 않습니다. partial unique index, `EXCLUDE` 제약, enum, `citext`,

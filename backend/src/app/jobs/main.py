@@ -18,11 +18,11 @@ import structlog
 from app.core.cache_invalidation import CacheInvalidationManager
 from app.core.config import get_settings
 from app.core.db import create_engine, dispose_engine, get_session_factory, session_scope
+from app.core.locks import advisory_lock
 from app.core.logging import configure_logging
 from app.core.redis_client import create_redis_client
 from app.jobs.budget_jobs import check_budget_thresholds, verify_budget_counters
 from app.jobs.catalog_jobs import check_missing_pricing
-from app.jobs.locks import advisory_lock
 from app.jobs.usage_jobs import aggregate_usage_daily, aggregate_usage_monthly
 from app.jobs.virtual_key_jobs import expire_virtual_keys
 

@@ -16,6 +16,12 @@ from app.models.enums import BudgetPeriod, BudgetPolicy, BudgetScope
 from app.policy.budget import DEFAULT_WARN_THRESHOLDS, PERIOD_PATTERN, AlertLevel
 from app.schemas.common import DecimalStr
 
+#: DB 열이 `numeric(14,4)` 입니다. 입력에 같은 제약을 걸지 않으면 `0.00005` 같은 값이
+#: PostgreSQL 에서는 반올림되고 Redis 카운터 문자열에서는 `Decimal.quantize()` 의
+#: ROUND_HALF_EVEN 으로 잘려, **DB 내구 사본과 집행 카운터가 달라집니다.**
+#: 표현할 수 없는 값은 저장 전에 422 로 거절합니다.
+MONEY_DIGITS = {"max_digits": 14, "decimal_places": 4}
+
 #: 소진값의 출처. 집행에 쓰이는 숫자(Redis)와 운영자가 보는 숫자를 같게 유지하되,
 #: 어느 쪽을 봤는지 숨기지 않습니다(05 문서 "Redis와 DB의 불일치").
 UsageSource = str
@@ -35,7 +41,9 @@ class BudgetSetRequest(BaseModel):
     한도 변경은 즉시 유효하고 당월 소진 누적에는 영향을 주지 않습니다(05 문서).
     """
 
-    limit_usd: Decimal = Field(ge=0, description="월 상한 USD. 0 은 '쓸 수 없음'이고 무제한이 아닙니다")
+    limit_usd: Decimal = Field(
+        ge=0, **MONEY_DIGITS, description="월 상한 USD. 0 은 '쓸 수 없음'이고 무제한이 아닙니다"
+    )
     policy: BudgetPolicy = BudgetPolicy.HARD_BLOCK
     period_type: BudgetPeriod = BudgetPeriod.MONTHLY
     warn_thresholds: list[int] = Field(default_factory=lambda: list(DEFAULT_WARN_THRESHOLDS))
@@ -47,7 +55,7 @@ class BudgetSetRequest(BaseModel):
 
 class AllocationItem(BaseModel):
     user_id: uuid.UUID
-    limit_usd: Decimal = Field(ge=0)
+    limit_usd: Decimal = Field(ge=0, **MONEY_DIGITS)
 
 
 class AllocationSetRequest(BaseModel):
@@ -76,13 +84,14 @@ class ReseedItem(BaseModel):
     scope: BudgetScope
     scope_id: uuid.UUID
     period: str = Field(pattern=PERIOD_PATTERN, description="UTC 기준 월. 'YYYY-MM'")
-    used_usd: Decimal = Field(ge=0)
+    used_usd: Decimal = Field(ge=0, **MONEY_DIGITS)
 
 
 class ReseedRequest(BaseModel):
     """소진값 재시드. 운영 예외입니다(05 문서).
 
     control plane 이 집행 카운터를 쓰는 유일한 경로이므로 ADMIN 전용이고 감사에 남습니다.
+    카운터 갱신에 실패하면 **전체가 취소되고 503** 입니다. 부분 적용은 없습니다.
     """
 
     items: list[ReseedItem] = Field(min_length=1, max_length=500)
@@ -207,8 +216,6 @@ class ReseedResultItem(BaseModel):
     period: str
     before_usd: DecimalStr | None
     after_usd: DecimalStr
-    #: Redis 카운터까지 갱신됐는지. 실패해도 DB 는 갱신되며, 다음 요청이 옛 값으로 되돌립니다.
-    counter_updated: bool
 
 
 class ReseedResponse(BaseModel):
