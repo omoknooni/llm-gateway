@@ -184,13 +184,25 @@ def test_inverted_date_range_is_rejected():
 
 
 def test_too_wide_date_range_is_rejected():
-    """집계 테이블이라도 무한 범위는 스캔 비용이 무제한입니다."""
-    start = date(2026, 1, 1)
-    with pytest.raises(ValidationError) as exc:
-        UsageService()._validate_range(start, start + timedelta(days=MAX_RANGE_DAYS + 1))
-    assert exc.value.code == "date_range_too_wide"
+    """집계 테이블이라도 무한 범위는 스캔 비용이 무제한입니다.
 
-    UsageService()._validate_range(start, start + timedelta(days=MAX_RANGE_DAYS))
+    상한은 **양끝 포함 일수**입니다. 날짜 차이로 세면 실제로는 하루 더 긴 범위가 통과합니다.
+    """
+    start = date(2026, 1, 1)
+
+    # 경계: 차이가 MAX-1 이면 포함 일수가 정확히 MAX 입니다.
+    UsageService()._validate_range(start, start + timedelta(days=MAX_RANGE_DAYS - 1))
+
+    with pytest.raises(ValidationError) as exc:
+        UsageService()._validate_range(start, start + timedelta(days=MAX_RANGE_DAYS))
+    assert exc.value.code == "date_range_too_wide"
+    assert exc.value.details["requested_days"] == MAX_RANGE_DAYS + 1
+
+
+def test_single_day_range_counts_as_one_day():
+    """같은 날 조회는 0일이 아니라 1일입니다."""
+    day = date(2026, 9, 15)
+    UsageService()._validate_range(day, day)
 
 
 # ── 쿼리 모양 (DB 없이 고정할 수 있는 계약) ──

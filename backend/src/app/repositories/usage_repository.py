@@ -192,18 +192,22 @@ class UsageQueryRepository:
         filters: UsageFilter,
         granularity: TrendGranularity,
     ) -> list[UsageTrendRow]:
-        if granularity == TrendGranularity.MONTH:
-            table = MonthlyUsageAggregate
-            bucket = MonthlyUsageAggregate.period
-            stmt = select(bucket, *_total_columns(table)).where(
-                bucket >= start.strftime("%Y-%m"), bucket <= end.strftime("%Y-%m")
-            )
-            stmt = self._apply_filters(stmt, table, filters)
-        else:
-            table = DailyUsageAggregate
-            bucket = DailyUsageAggregate.bucket_date
-            stmt = self._scoped(select(bucket, *_total_columns(table)), start, end, filters)
+        """기간별 추이.
 
+        **월 단위도 일 집계에서 만듭니다.** 월 집계 테이블을 쓰면 `2026-09-15 ~ 2026-09-20`
+        요청에 9월 **전체**가 돌아옵니다 — 같은 화면의 overview·leaderboard 와 숫자가
+        달라지고, 사용자가 건 기간 필터를 믿을 수 없게 됩니다.
+
+        추이 응답에는 p95 를 싣지 않으므로(합성 불가) 일 집계의 합계와 가중 평균만으로
+        정확하게 만들 수 있습니다. 월 집계 테이블은 **월 전체가 곧 기간**인 곳
+        (예산 breakdown)에서만 씁니다.
+        """
+        bucket = (
+            func.to_char(DailyUsageAggregate.bucket_date, "YYYY-MM")
+            if granularity == TrendGranularity.MONTH
+            else DailyUsageAggregate.bucket_date
+        )
+        stmt = self._scoped(select(bucket, *_total_columns(DailyUsageAggregate)), start, end, filters)
         stmt = stmt.group_by(bucket).order_by(bucket)
         rows = (await self._session.execute(stmt)).all()
         return [

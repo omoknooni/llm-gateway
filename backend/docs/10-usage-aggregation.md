@@ -43,6 +43,27 @@ gateway ──INSERT──> usage.usage_events ──┐
 - 워터마크를 두지 않는 이유: 상태 자체가 틀어졌을 때 복구 수단이 없어집니다. 멱등하면
   실패는 "다음 주기에 다시 돌면 되는 것"이 됩니다.
 
+### Backfill — 창 밖의 원천
+
+되돌아보기 창은 **정상 운영의 지연**만 덮습니다. 그보다 오래된 원천은 주기 집계로는 영원히
+들어오지 않습니다. 두 경우에 그런 이벤트가 생깁니다.
+
+1. **M7 배포 시점** — gateway 는 M7 이전부터 `usage.usage_events` 를 써 왔습니다. 배포 순간
+   이미 창보다 오래된 이벤트가 쌓여 있습니다.
+2. **창보다 긴 장애** — gateway 스풀은 메모리 기반이고 지연 상한에 대한 계약이 없습니다.
+   복구가 창보다 늦으면 주기 집계가 훑는 구간 밖입니다.
+
+```bash
+python -m app.jobs.backfill                                  # 최초 이벤트부터 오늘까지
+python -m app.jobs.backfill --since 2026-08-01 --until 2026-09-30
+python -m app.jobs.backfill --dry-run                        # 구간만 계산
+```
+
+주기 job 에 넣지 않고 별도 명령으로 둔 이유는, 전체 재집계가 **사람이 시점을 정해 한 번
+돌리는 작업**이기 때문입니다. 10분마다 전 구간을 훑으면 비용이 이벤트 수에 비례해 무한히
+늘어납니다. backfill 은 구간을 31일씩 쪼개 돌고, 주기 집계와 같은 advisory lock 을 잡습니다.
+집계가 멱등하므로 주기 집계와 겹쳐도 수치가 두 배가 되지 않습니다.
+
 ### 집계 축과 버킷
 
 집계 PK는 `(버킷, team_id, user_id, virtual_key_id, model_alias)`입니다.
@@ -95,10 +116,19 @@ gateway ──INSERT──> usage.usage_events ──┐
 | `GET` | `/usage/trend` | 전원(범위 축소) | 기간별 추이(일/월) |
 | `GET` | `/usage/auth-events` | 전원(범위 축소) | 정책 거절 요약 |
 
-공통 파라미터: `from_date`, `to_date`(UTC 일자, 양끝 포함. 기본값은 최근 30일),
-`team_id`, `user_id`, `virtual_key_id`, `model_alias`.
+공통 파라미터: `from_date`, `to_date`(UTC 일자, **양끝 포함**. 기본값은 최근 30일),
+`team_id`, `user_id`, `virtual_key_id`, `model_alias`. 네 필터는 **네 엔드포인트 전부**에서
+동작합니다 — 문서에만 있고 일부 엔드포인트가 받지 않으면 drill-down 계약이 깨집니다.
+
+기간은 양끝을 포함하므로 일수는 `(to_date - from_date).days + 1` 입니다. "최근 30일"의
+시작일은 `오늘 - 29` 이고, 상한 366일도 포함 일수로 셉니다. 날짜 차이로 세면 어느 쪽이든
+하루씩 넓어집니다.
 
 - `axis`: `TEAM` / `USER` / `MODEL` / `VIRTUAL_KEY` — 집계 PK의 부분집합입니다.
+- `granularity`(trend): `DAY` / `MONTH`. **월 단위도 일 집계에서 만듭니다** — 월 집계 테이블을
+  쓰면 `09-15 ~ 09-20` 요청에 9월 전체가 돌아와 overview·leaderboard 와 숫자가 갈립니다.
+  추이 응답에는 p95 가 없으므로 일 집계의 합계·가중 평균으로 정확히 만들 수 있습니다.
+  월 집계 테이블은 **월 전체가 곧 기간**인 곳(예산 breakdown)에서만 씁니다.
 - `metric`: `COST` / `REQUESTS` / `TOKENS` — 리더보드 정렬 기준.
 - drill-down은 별도 엔드포인트가 아니라 **같은 엔드포인트에 필터**를 겁니다.
 
@@ -121,6 +151,15 @@ gateway ──INSERT──> usage.usage_events ──┐
 
 한 번에 최대 366일입니다(`date_range_too_wide`). 집계 테이블이라도 무한 범위는 스캔 비용이
 무제한입니다.
+
+### overview의 스냅샷
+
+overview는 합계와 세 개의 top 목록을 조회합니다. 한 응답으로 묶는 것만으로는 부족합니다 —
+기본 격리 수준(`READ COMMITTED`)에서는 **SELECT마다 새 스냅샷**을 보므로, 조회 사이에 집계
+UPSERT가 커밋되면 합계와 상위 목록이 서로 다른 집계 결과를 봅니다.
+
+그래서 overview 트랜잭션만 `REPEATABLE READ READ ONLY`로 올립니다. `SET TRANSACTION`은
+트랜잭션의 첫 문장이어야 하므로, 실패하면 조용히 약한 보장으로 떨어지지 않고 경고를 남깁니다.
 
 ### 빈 버킷
 

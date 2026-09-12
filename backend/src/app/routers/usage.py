@@ -30,13 +30,14 @@ from app.services.usage_service import UsageService
 
 router = APIRouter(tags=["Usage"], prefix="/usage")
 
-#: 기본 조회 기간. 지정하지 않으면 최근 30일(UTC 일자 기준)입니다.
+#: 기본 조회 기간(일). 양끝을 포함하므로 시작일은 `오늘 - (N-1)` 입니다 —
+#: `오늘 - N` 으로 잡으면 "최근 30일"이 31일을 조회합니다.
 DEFAULT_RANGE_DAYS = 30
 
 
 def _default_range() -> tuple[date, date]:
     today = utcnow().date()
-    return today - timedelta(days=DEFAULT_RANGE_DAYS), today
+    return today - timedelta(days=DEFAULT_RANGE_DAYS - 1), today
 
 
 def _range(from_date: date | None, to_date: date | None) -> tuple[date, date]:
@@ -56,6 +57,7 @@ async def get_usage_overview(
     to_date: date | None = ToQuery,
     team_id: uuid.UUID | None = Query(default=None),
     user_id: uuid.UUID | None = Query(default=None),
+    virtual_key_id: uuid.UUID | None = Query(default=None),
     model_alias: str | None = Query(default=None, max_length=128),
 ) -> UsageOverviewResponse:
     """대시보드 카드용 합계와 상위 팀/사용자/모델.
@@ -69,7 +71,12 @@ async def get_usage_overview(
         actor=actor,
         from_date=start,
         to_date=end,
-        requested=UsageFilter(team_id=team_id, user_id=user_id, model_alias=model_alias),
+        requested=UsageFilter(
+            team_id=team_id,
+            user_id=user_id,
+            virtual_key_id=virtual_key_id,
+            model_alias=model_alias,
+        ),
     )
 
 
@@ -152,6 +159,7 @@ async def get_auth_event_summary(
     team_id: uuid.UUID | None = Query(default=None),
     user_id: uuid.UUID | None = Query(default=None),
     virtual_key_id: uuid.UUID | None = Query(default=None),
+    model_alias: str | None = Query(default=None, max_length=128),
 ) -> AuthEventSummaryResponse:
     """정책 거절(401/403/429) 요약.
 
@@ -164,5 +172,10 @@ async def get_auth_event_summary(
         actor=actor,
         from_date=start,
         to_date=end,
-        requested=UsageFilter(team_id=team_id, user_id=user_id, virtual_key_id=virtual_key_id),
+        requested=UsageFilter(
+            team_id=team_id,
+            user_id=user_id,
+            virtual_key_id=virtual_key_id,
+            model_alias=model_alias,
+        ),
     )

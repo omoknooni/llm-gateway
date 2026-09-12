@@ -98,14 +98,19 @@ def _upsert(table, bucket_column: str, source: Select):
     )
 
 
-async def aggregate_usage_daily(session: AsyncSession) -> int:
-    """최근 구간의 일 집계를 다시 만듭니다. 처리한 버킷 수를 돌려줍니다.
+async def aggregate_usage_daily(
+    session: AsyncSession, *, since: date | None = None, until: date | None = None
+) -> int:
+    """일 집계를 다시 만듭니다. 처리한 버킷 수를 돌려줍니다.
 
-    되돌아보는 일수(`USAGE_AGGREGATION_LOOKBACK_DAYS`)만큼 재집계합니다. 늦게 도착한
-    이벤트가 영원히 집계에 빠지는 것을 막기 위해서입니다(gateway 의 메모리 스풀).
+    구간을 주지 않으면 되돌아보는 일수(`USAGE_AGGREGATION_LOOKBACK_DAYS`)만큼입니다. 늦게
+    도착한 이벤트가 집계에 빠지는 것을 막기 위해서입니다(gateway 의 메모리 스풀).
+
+    되돌아보기 창은 **정상 운영의 지연**만 덮습니다. 그보다 오래된 원천(M7 배포 이전에 이미
+    쌓여 있던 이벤트, 창보다 긴 장애 뒤에 들어온 이벤트)은 이 경로로 영원히 집계되지
+    않으므로, 구간을 명시해 부르는 backfill 이 따로 필요합니다(`app.jobs.backfill`).
     """
-    settings = get_settings()
-    start_date, end_date = aggregation_window(utcnow(), settings.USAGE_AGGREGATION_LOOKBACK_DAYS)
+    start_date, end_date = _resolve_window(since, until)
     start, end = _day_bounds(start_date, end_date)
 
     bucket = func.date(func.timezone("UTC", UsageEvent.occurred_at)).cast(Date).label("bucket_date")
@@ -124,8 +129,10 @@ async def aggregate_usage_daily(session: AsyncSession) -> int:
     return count
 
 
-async def aggregate_usage_monthly(session: AsyncSession) -> int:
-    """재집계 구간이 걸치는 월의 월 집계를 다시 만듭니다.
+async def aggregate_usage_monthly(
+    session: AsyncSession, *, since: date | None = None, until: date | None = None
+) -> int:
+    """구간이 걸치는 월의 월 집계를 다시 만듭니다.
 
     **일 집계가 아니라 원천에서 직접 계산합니다.** 05 문서의 작업 표는 "일 집계 → 월 집계"로
     적혀 있지만, `p95_latency_ms` 는 합성할 수 없는 지표입니다 — 일별 p95 의 p95 는 그 달의
@@ -145,6 +152,22 @@ async def aggregate_usage_monthly(session: AsyncSession) -> int:
     await session.commit()
     logger.info("job.usage_monthly_aggregated", rows=total, months=months_in_range(start_date, end_date))
     return total
+
+
+def _resolve_window(since: date | None, until: date | None) -> tuple[date, date]:
+    """집계 구간. 주지 않으면 설정된 되돌아보기 창입니다."""
+    if since is not None or until is not None:
+        default_start, default_end = aggregation_window(
+            utcnow(), get_settings().USAGE_AGGREGATION_LOOKBACK_DAYS
+        )
+        return since or default_start, until or default_end
+    return aggregation_window(utcnow(), get_settings().USAGE_AGGREGATION_LOOKBACK_DAYS)
+
+
+async def earliest_event_date(session: AsyncSession) -> date | None:
+    """원천에 남아 있는 가장 이른 이벤트의 UTC 일자. backfill 시작점을 정하는 데 씁니다."""
+    stmt = select(func.min(func.date(func.timezone("UTC", UsageEvent.occurred_at))))
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 def _day_bounds(start_date: date, end_date: date) -> tuple[datetime, datetime]:

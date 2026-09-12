@@ -14,9 +14,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date
 
 import structlog
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentAdmin
@@ -52,7 +53,8 @@ from app.schemas.usage import (
 
 logger = structlog.get_logger()
 
-#: 한 번에 조회할 수 있는 최대 기간(일). 집계 테이블이라도 무한 범위는 스캔 비용이 무제한입니다.
+#: 한 번에 조회할 수 있는 최대 기간(일, **양끝 포함**). 집계 테이블이라도 무한 범위는
+#: 스캔 비용이 무제한입니다. 날짜 차이로 세면 실제로는 하루 더 긴 범위가 통과합니다.
 MAX_RANGE_DAYS = 366
 #: overview 의 top N. 화면 카드가 담을 수 있는 크기입니다.
 TOP_N = 5
@@ -72,8 +74,13 @@ class UsageService:
 
         네 번의 조회를 한 응답으로 묶습니다. 화면이 카드마다 따로 호출하면 카드 사이에
         집계 job 이 돌아 숫자가 서로 맞지 않을 수 있습니다.
+
+        묶는 것만으로는 부족합니다. 기본 격리 수준(`READ COMMITTED`)에서는 **SELECT 마다 새
+        스냅샷**을 보므로, 네 조회 사이에 집계 UPSERT 가 커밋되면 합계와 상위 목록이 서로 다른
+        집계 결과를 보게 됩니다. 그래서 이 트랜잭션만 `REPEATABLE READ READ ONLY` 로 올립니다.
         """
         self._validate_range(from_date, to_date)
+        await self._begin_snapshot(session)
         filters = await self._scoped_filters(session, actor, requested)
         repo = UsageQueryRepository(session)
 
@@ -186,14 +193,33 @@ class UsageService:
     # ── 내부 ──
 
     @staticmethod
+    async def _begin_snapshot(session: AsyncSession) -> None:
+        """이후 조회를 한 스냅샷으로 묶습니다.
+
+        `SET TRANSACTION` 은 트랜잭션의 **첫 문장**이어야 합니다. overview 는 읽기 전용이고
+        세션은 요청 스코프라 이 호출이 첫 문장입니다. 그렇지 않은 상황(이미 다른 문장이
+        실행된 세션)에서는 PostgreSQL 이 거절하므로, 조용히 약한 보장으로 떨어지지 않고
+        경고를 남깁니다 — 응답 수치는 여전히 나옵니다.
+        """
+        try:
+            await session.execute(
+                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            )
+        except Exception as exc:
+            await session.rollback()
+            logger.warning("usage.snapshot_isolation_unavailable", error=str(exc))
+
+    @staticmethod
     def _validate_range(from_date: date, to_date: date) -> None:
         if from_date > to_date:
             raise ValidationError("from_date 가 to_date 보다 뒤입니다", code="invalid_date_range")
-        if (to_date - from_date) > timedelta(days=MAX_RANGE_DAYS):
+        # 양끝을 포함하므로 일수는 차이 + 1 입니다.
+        days = (to_date - from_date).days + 1
+        if days > MAX_RANGE_DAYS:
             raise ValidationError(
                 f"조회 기간은 최대 {MAX_RANGE_DAYS}일입니다",
                 code="date_range_too_wide",
-                details={"max_days": MAX_RANGE_DAYS},
+                details={"max_days": MAX_RANGE_DAYS, "requested_days": days},
             )
 
     async def _scoped_filters(

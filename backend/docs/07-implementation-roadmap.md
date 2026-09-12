@@ -24,7 +24,7 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
 | M6 예산 | 완료 (리뷰 P1 3건 반영 + 통합 테스트 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
-| M7 사용량 집계·조회 | 완료 (집계 job 통합 테스트 완료. 실데이터는 gateway 착수 후) |
+| M7 사용량 집계·조회 | 완료 (리뷰 P1·P2 4건 반영 — [review/M7_usage_aggregation/response.md](review/M7_usage_aggregation/response.md)) |
 | M8 rate limit | 미착수 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
@@ -43,9 +43,12 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 psql 변수가 dollar-quoted 블록 안에서 치환되지 않아 문법 오류로 끝났습니다. 오프라인 SQL
 렌더링으로는 잡히지 않는 종류의 결함입니다([db/README.md](../db/README.md)).
 
-**남은 것**: gateway 가 usage 이벤트를 쓰기 시작해야 M7 집계를 실데이터로 검증할 수 있습니다.
-라우터 계층(HTTP 레벨)의 통합 테스트는 아직 없습니다 — 현재 통합 테스트는 서비스·job·스키마
-층입니다.
+**남은 것**:
+
+- gateway 가 usage 이벤트를 쓰기 시작해야 M7 집계를 **실데이터로** 검증할 수 있습니다.
+- 라우터 계층(HTTP) 통합 테스트가 없습니다. 현재 통합 테스트는 서비스·job·스키마 층입니다.
+- 테스트 전략의 "계약" 층(**OpenAPI 스냅샷 비교**)이 아직 비어 있습니다. 응답·파라미터
+  스키마 변경이 리뷰 diff 에 드러나지 않습니다.
 
 ## Milestones
 
@@ -185,6 +188,8 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 - 예산 **UTC 월 경계** — 특히 KST 기준 월초/월말 (05). 사용량 일 버킷도 같은 기준 (10)
 - 집계의 **멱등성**과 `user_id` NULL → 예약 UUID 매핑 (10)
 - 사용량 조회의 **인가 범위 축소** — 다른 팀·다른 사람은 빈 결과가 아니라 403 (00·10)
+- 기간 필터가 **양끝 포함**이고 월 단위 추이도 그 범위를 벗어나지 않는 것 (10)
+- lookback 밖 원천이 backfill 로 들어오는 것 (10)
 - 팀 이동 시 **캐시 무효화 대상 VK 집합** (02·03)
 - 트랜잭션 커밋 **이후** 캐시 삭제 순서 (00)
 - 마지막 ADMIN 보호, 배분 합계 초과 거절 (02·05)
