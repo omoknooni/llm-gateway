@@ -19,18 +19,33 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 |---|---|
 | M0 계약 고정 | 완료 — [08-shared-contracts.md](08-shared-contracts.md) (gateway 합의 대기) |
 | M1 프로젝트 골격 | 완료 |
-| M2 스키마·감사·캐시 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
+| M2 스키마·감사·캐시 | 완료 (실 DB 적용·권한 경계 검증 완료) |
 | M3 인증·인가, 팀/사용자 | 완료 |
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
-| M6 예산 | 완료 (리뷰 P1 3건 반영 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
-| M7 사용량 집계·조회 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
+| M6 예산 | 완료 (리뷰 P1 3건 반영 + 통합 테스트 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
+| M7 사용량 집계·조회 | 완료 (집계 job 통합 테스트 완료. 실데이터는 gateway 착수 후) |
 | M8 rate limit | 미착수 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
-**미검증 항목**: 개발 환경에 PostgreSQL 이 없어 마이그레이션 실 적용과 통합 테스트를 아직
-돌리지 못했습니다. 현재 검증 범위는 오프라인 SQL 렌더링(`alembic upgrade head --sql`)과
-단위 테스트입니다. DB 를 띄운 뒤 `db/run_migration.sh` 적용과 통합 테스트가 남아 있습니다.
+**검증 상태**: `backend/docker-compose.test.yml` + `scripts/test-stack.sh` 로 PostgreSQL·Redis 를
+띄우고 통합 테스트를 돌립니다(`backend/README.md`). 스택이 없으면 통합 테스트는 건너뛰므로
+`pytest` 는 어느 환경에서든 통과합니다.
+
+해소된 것:
+
+- 마이그레이션이 빈 DB 에 적용되고 재적용이 멱등합니다.
+- `gateway_app` 역할의 `audit` 스키마 접근이 거부되고, 컬럼 단위 GRANT 까지 의도대로 걸립니다.
+- 리뷰가 요청한 동시성·금액 정밀도·재시드 원자성 테스트가 들어왔습니다.
+- 집계 job 이 실제 데이터에서 UTC 버킷·NULL 사용자 매핑·멱등성을 지킵니다.
+
+이 과정에서 `init/02_create_roles.sql` 이 **한 번도 동작한 적이 없었다**는 것이 드러났습니다.
+psql 변수가 dollar-quoted 블록 안에서 치환되지 않아 문법 오류로 끝났습니다. 오프라인 SQL
+렌더링으로는 잡히지 않는 종류의 결함입니다([db/README.md](../db/README.md)).
+
+**남은 것**: gateway 가 usage 이벤트를 쓰기 시작해야 M7 집계를 실데이터로 검증할 수 있습니다.
+라우터 계층(HTTP 레벨)의 통합 테스트는 아직 없습니다 — 현재 통합 테스트는 서비스·job·스키마
+층입니다.
 
 ## Milestones
 

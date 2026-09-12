@@ -79,14 +79,33 @@ DB·Redis 가 붙는 시점으로 남깁니다. 파이프라인 사용과 실패
 
 ## 검증
 
-- `ruff check` 통과, 단위 테스트 182개 통과(리뷰 시점 139개 + M7 32개 + 회귀 11개)
-- 여전히 통합 테스트는 없습니다. 리뷰의 "검증 범위" 지적은 그대로 유효합니다.
+리뷰의 "검증 범위" 지적(통합 테스트 부재)도 해소했습니다. `backend/docker-compose.test.yml`
+로 PostgreSQL·Redis 를 띄우고 돌립니다(`./scripts/test-stack.sh up && ./scripts/test-stack.sh test`).
 
-## 남은 것 — DB 가 붙은 뒤 할 통합 테스트
+- `ruff check` 통과, 전체 212개 통과 (단위 182 + 통합 30)
+- 리뷰가 요청한 세 건이 모두 통합 테스트로 들어왔습니다.
 
-리뷰가 요청했으나 환경 때문에 못 한 것들입니다. 잊지 않도록 여기 남깁니다.
+| 리뷰 권장 | 테스트 |
+|---|---|
+| P1-1 동시 요청 합계 (권장안 3) | `test_budget_concurrency.py::test_concurrent_user_budgets_cannot_exceed_team_limit` / `::test_concurrent_allocation_replacements_keep_invariant` |
+| P1-2 경계값 DB·Redis 일치 (권장안 3) | `test_budget_reseed.py::test_db_value_and_redis_counter_agree` (5개 경계값) |
+| P1-3 Redis 장애 후 복구 (권장안 3) | `test_budget_reseed.py::test_reseed_rolls_back_when_counter_write_fails` / `::test_reseed_succeeds_after_redis_recovers` |
+| M2 미검증 항목 | `test_schema_and_grants.py` (8건) |
 
-1. 같은 팀에 대한 동시 예산 설정 두 건의 최종 합계가 팀 한도를 넘지 않을 것 (P1-1)
-2. `numeric(14,4)` 경계값의 DB 저장값과 Redis 카운터 문자열이 일치할 것 (P1-2)
-3. Redis 장애 중 재시드가 503 이고 DB 가 변경되지 않을 것, 복구 후 재호출이 성공할 것 (P1-3)
-4. 마이그레이션 실적용과 `gateway_app` 역할의 `audit` 스키마 접근 거부 (M2 부터의 미검증 항목)
+**동시성 테스트가 실제로 버그를 잡는지 확인했습니다.** `lock_team_budget()` 을 임시로
+무력화하고 돌리면 두 테스트가 실패하고 배분 합계가 180 이 됩니다. 잠금을 되살리면 통과합니다.
+리뷰가 지적한 write skew 가 재현되고, 수정이 그것을 막는다는 뜻입니다.
+
+## 통합 테스트를 붙이면서 드러난 것
+
+`db/init/02_create_roles.sql` 이 **한 번도 동작한 적이 없었습니다.** psql 변수(`:'name'`)가
+dollar-quoted 블록(`DO $$ ... $$`) 안에서 치환되지 않아 문법 오류로 끝납니다. 오프라인 SQL
+렌더링으로는 드러나지 않는 결함이고, 스크립트를 실제로 돌린 이번에 처음 나왔습니다.
+`\gexec` 로 고쳤고 함정을 `db/README.md` 규칙에 남겼습니다.
+
+## 남은 것
+
+- 라우터 계층(HTTP) 통합 테스트는 아직 없습니다. 현재 통합 테스트는 서비스·job·스키마 층입니다.
+  인가 분기(403/404)가 의존성·서비스 양쪽에 걸쳐 있어 HTTP 레벨 확인이 있으면 좋습니다.
+- M7 집계의 **실데이터** 검증은 gateway 가 이벤트를 쓰기 시작해야 합니다. 지금은 테스트가
+  직접 넣은 이벤트로 확인했습니다.

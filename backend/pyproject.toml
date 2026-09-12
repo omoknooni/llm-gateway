@@ -34,6 +34,10 @@ packages = ["src/app"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 통합 테스트의 엔진·Redis 연결은 session 스코프 픽스처입니다. 테스트마다 이벤트 루프가
+# 새로 열리면 그 연결이 닫힌 루프에 묶여 "Event loop is closed" 로 깨집니다.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 pythonpath = ["src"]
 
