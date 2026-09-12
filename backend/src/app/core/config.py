@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     #: 0 으로 두면 정상 상태에서도 경고가 쏟아집니다.
     BUDGET_COUNTER_DRIFT_WARN_USD: float = 1.0
 
+    # ── 사용량 집계 ──
+    #: 재집계 시 되돌아볼 일수. gateway 가 이벤트를 메모리에 스풀했다가 쓰므로, 장애 복구 뒤
+    #: 어제·그제 타임스탬프의 행이 새로 들어올 수 있습니다. 집계가 멱등해 다시 훑어도 됩니다.
+    USAGE_AGGREGATION_LOOKBACK_DAYS: int = 3
+
     # ── Virtual Key ──
     VIRTUAL_KEY_ENV: str = "dev"  # 키 문자열에 박히는 환경 세그먼트 (live | dev)
     VIRTUAL_KEY_MAX_TTL_DAYS: int = 365

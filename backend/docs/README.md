@@ -22,6 +22,7 @@
 | [07-implementation-roadmap.md](07-implementation-roadmap.md) | 마일스톤, 순서, 테스트 전략, 미결정 사항 |
 | [08-shared-contracts.md](08-shared-contracts.md) | gateway와 공유하는 계약 모음 (키 규약, 해석 규칙, DB 경계) |
 | [09-gateway-contract-response.md](09-gateway-contract-response.md) | gateway 회신 결과, 스키마 변경 요청 S1~S4 처리, 확인 대기 항목 |
+| [10-usage-aggregation.md](10-usage-aggregation.md) | 사용량 집계 job, 지표 정의, 대시보드·리더보드 조회 API |
 
 ## 문서 규칙
 

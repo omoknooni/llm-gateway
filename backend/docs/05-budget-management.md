@@ -231,7 +231,7 @@ Redis 카운터가 빠르고, `budget_usages`가 내구적입니다. 둘이 어�
 | job | 주기 | 내용 |
 |---|---|---|
 | `aggregate_usage_daily` | 10분 | `usage.usage_events` → 일 집계 테이블 |
-| `aggregate_usage_monthly` | 1시간 | 일 집계 → 월 집계 |
+| `aggregate_usage_monthly` | 1시간 | 월 집계. 구현은 일 집계가 아니라 **원천에서 직접** 계산합니다 — p95는 합성할 수 없습니다([10](10-usage-aggregation.md)) |
 | `check_budget_thresholds` | 10분 | 임계 도달 감지, `notified_thresholds` 갱신 |
 | `verify_budget_counters` | 1시간 | Redis vs DB 차이 검증(경고만, 자동 교정 없음) |
 

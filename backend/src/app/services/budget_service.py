@@ -32,6 +32,7 @@ from app.models.auth import Team, User
 from app.models.budget import BudgetConfig
 from app.models.enums import BudgetPolicy, BudgetScope, UserRole
 from app.policy import budget as policy
+from app.policy.usage import NO_USER_ID, NO_USER_LABEL
 from app.repositories.budget_repository import BudgetConfigRepository, BudgetUsageRepository
 from app.repositories.team_repository import TeamRepository
 from app.repositories.usage_repository import UsageAggregateRepository, UsageBreakdownRow
@@ -494,6 +495,9 @@ class BudgetService:
         member_names = await self._user_names(
             session, [uuid.UUID(row.key) for row in by_member if _is_uuid(row.key)]
         )
+        # 팀 공용 VK 호출은 사람에 귀속되지 않아 집계에 예약 UUID 로 모입니다(M7). 비용이 실린
+        # 행이 이름 없이 남으면 읽는 사람이 원인을 못 찾으므로 라벨을 답니다.
+        member_names[NO_USER_ID] = NO_USER_LABEL
         return TeamBudgetUsageResponse(
             period=period,
             budget=item,

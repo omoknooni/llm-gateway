@@ -404,9 +404,9 @@ usage.ingest_gaps
 | 4 | ORM 모델 반영 (`Provider`, `ModelAlias.endpoint_url`, `UsageEvent.client`, `AuthEvent`) | **완료** |
 | 5 | 모델 API에 `endpoint_url` 추가 + https 검증 + Mantle 필수 검증 | **완료** |
 | 6 | `cache_keys.model_list()` 추가, 카탈로그 변경 4곳에서 함께 DEL (Q1) | **완료** |
-| 7 | `auth_events` 조회 API — 행 수가 아니라 `SUM(occurrence_count)` | M7 |
+| 7 | `auth_events` 조회 API — 행 수가 아니라 `SUM(occurrence_count)` | **완료** (`GET /usage/auth-events`, [10](10-usage-aggregation.md)) |
 | 8 | 문서 갱신 — 01(스키마), 03(감사), 04(카탈로그), 08(계약) | **완료** |
-| 9 | `usage.daily_client_usage` 신설 여부 (Q2 후속) | M7에서 판단 |
+| 9 | `usage.daily_client_usage` 신설 여부 (Q2 후속) | **종결 — 신설하지 않음** ([10](10-usage-aggregation.md)) |
 | 10 | `usage.ingest_gaps` 최종 형태 (Q5) | Phase 4에서 판단 |
 
 **`0004`와 `0005`를 나눈 이유**: PostgreSQL은 `ALTER TYPE ... ADD VALUE`로 추가한 enum 값을

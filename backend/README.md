@@ -46,7 +46,7 @@ MIGRATION_DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/ll
 PYTHONPATH=src .venv/bin/uvicorn app.main:app --reload --port 8080
 
 # 주기 작업 (별도 프로세스. 만료 키 정리, 캐시 재시도, 단가 누락 점검,
-#            예산 임계 감지, 예산 카운터 정합성 검증)
+#            예산 임계 감지, 예산 카운터 정합성 검증, 사용량 일·월 집계)
 PYTHONPATH=src .venv/bin/python -m app.jobs.main
 ```
 

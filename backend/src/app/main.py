@@ -134,6 +134,7 @@ def create_app() -> FastAPI:
         models,
         service_tokens,
         teams,
+        usage,
         users,
         virtual_keys,
     )
@@ -150,6 +151,7 @@ def create_app() -> FastAPI:
     api.include_router(allowed_models.router)
     api.include_router(budgets.router)
     api.include_router(service_tokens.router)
+    api.include_router(usage.router)
     api.include_router(internal.router)
     app.include_router(api)
 

@@ -23,6 +23,7 @@ from app.core.redis_client import create_redis_client
 from app.jobs.budget_jobs import check_budget_thresholds, verify_budget_counters
 from app.jobs.catalog_jobs import check_missing_pricing
 from app.jobs.locks import advisory_lock
+from app.jobs.usage_jobs import aggregate_usage_daily, aggregate_usage_monthly
 from app.jobs.virtual_key_jobs import expire_virtual_keys
 
 logger = structlog.get_logger()
@@ -45,6 +46,10 @@ JOBS: list[Job] = [
     # 예산 점검은 둘 다 집행 카운터를 **읽기만** 합니다(05 문서).
     Job("check_budget_thresholds", 600, check_budget_thresholds, needs_redis=True),
     Job("verify_budget_counters", 3600, verify_budget_counters, needs_redis=True),
+    # 집계는 멱등해서(UPSERT) 실패하면 다음 주기에 그대로 다시 돌면 됩니다.
+    # 일 집계가 월 집계보다 먼저 오도록 목록 순서를 맞춰 둡니다(동시 실행이라 보장은 아닙니다).
+    Job("aggregate_usage_daily", 600, aggregate_usage_daily),
+    Job("aggregate_usage_monthly", 3600, aggregate_usage_monthly),
 ]
 
 
