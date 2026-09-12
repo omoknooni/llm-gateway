@@ -123,10 +123,10 @@ providers/mantle.py   ──────────────── 위 두 �
 GPT 도입에 필요한 것은 "bedrock-runtime으로 옮기기"가 아니라 **OpenAI Chat Completions wire를
 말하는 adapter를 추가하는 것**입니다. 두 축은 직교합니다.
 
-## M7 후보 — OpenAI Chat Completions adapter
+## M9 후보 — OpenAI Chat Completions adapter
 
 착수 여부는 "GPT 계열을 사내에 열 것인가"라는 **제품 결정**에 달려 있습니다. 결정되면 아래 형태로
-갑니다. Phase 4보다 뒤입니다.
+갑니다. Phase 4(M7·M8)보다 뒤라 **M9**입니다.
 
 ### 형태
 

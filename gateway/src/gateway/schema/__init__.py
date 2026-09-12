@@ -11,21 +11,31 @@
 
     auth    SELECT + virtual_keys.last_used_at UPDATE
     model   SELECT
-    budget  SELECT + budget_usages UPSERT   (Phase 4)
+    budget  SELECT + budget_usages UPSERT
     usage   usage_events / auth_events INSERT
     audit   접근 없음
 """
 
 from gateway.schema.auth import Team, User, VirtualKey, VirtualKeyAllowedModel
 from gateway.schema.base import Base
-from gateway.schema.model import ModelAlias, ModelPricing, TeamAllowedModel, UserAllowedModel
+from gateway.schema.budget import BudgetConfig, BudgetUsage
+from gateway.schema.model import (
+    ModelAlias,
+    ModelPricing,
+    RateLimitConfig,
+    TeamAllowedModel,
+    UserAllowedModel,
+)
 from gateway.schema.usage import AuthEvent, UsageEvent
 
 __all__ = [
     "AuthEvent",
     "Base",
+    "BudgetConfig",
+    "BudgetUsage",
     "ModelAlias",
     "ModelPricing",
+    "RateLimitConfig",
     "Team",
     "TeamAllowedModel",
     "UsageEvent",

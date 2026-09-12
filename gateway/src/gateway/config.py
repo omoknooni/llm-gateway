@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     # ── client 식별 (docs/03) ──
     registered_clients: str = "claude-code,claude-desktop,codex,openai-sdk"
 
+    # ── 집행 (docs/08) ──
+    #: rpm/tpm 고정 윈도(60초)의 **2배**입니다. backend 가 막 닫힌 윈도를 읽어 "직전 1분
+    #: 사용률"을 보여줄 수 있어야 합니다.
+    rate_limit_window_ttl_seconds: int = 120
+    #: 동시성 슬롯의 누수 방어. pod 가 스트림 도중 죽어 반납되지 않은 슬롯이 이 시간 안에
+    #: 사라집니다. 스트림 상한보다 길어야 정상 요청이 자기 슬롯을 잃지 않습니다.
+    concurrency_lease_margin_seconds: int = 60
+    #: tpm 선차감의 입력 추정 계수. 정확한 토크나이저 대신 쓰는 값이며, 정산이 교정합니다.
+    tpm_chars_per_token: int = 4
+    #: 월 소진 카운터의 만료. 키에 기간(YYYY-MM)이 들어 있어 지난 달 키만 정리됩니다.
+    #: 진행 중인 달보다 넉넉히 길어야 합니다.
+    budget_counter_ttl_seconds: int = 62 * 24 * 3600
+
     # ── 기록 ──
     last_used_throttle_seconds: int = 60
     auth_event_window_seconds: int = 60
@@ -79,6 +92,11 @@ class Settings(BaseSettings):
         if v not in ("json", "console"):
             raise ValueError("LOG_FORMAT must be 'json' or 'console'")
         return v
+
+    @property
+    def concurrency_lease_ttl_seconds(self) -> int:
+        """스트림 상한 + 여유. 두 값을 따로 두면 한쪽만 늘렸을 때 조용히 어긋납니다."""
+        return self.stream_timeout + self.concurrency_lease_margin_seconds
 
     @property
     def registered_client_set(self) -> frozenset[str]:

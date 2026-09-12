@@ -48,3 +48,40 @@ def vk_miss(key_hash: str) -> str:
     발급 직후의 키가 오래 막히지 않습니다.
     """
     return f"vk:miss:{key_hash}"
+
+
+# ── 정책 캐시: 집행 (Phase 4, docs/08) ──
+
+
+def budget_policy(scope: str, scope_id: str) -> str:
+    """예산 설정. scope 는 'team' 또는 'user'."""
+    return f"policy:budget:{scope.lower()}:{scope_id}"
+
+
+def rate_limit_policy(scope: str, scope_id: str | None, model_alias: str | None) -> str:
+    """rate limit 설정. GLOBAL 은 scope_id 자리에 'global', 전체 모델은 alias 자리에 '*'."""
+    return f"policy:ratelimit:{scope.lower()}:{scope_id or 'global'}:{model_alias or '*'}"
+
+
+# ── 집행 카운터: gateway 전용. backend 는 읽기만 (docs/08) ──
+#
+# 이 키들을 지우면 소진액이 0 으로 리셋되고 rate limit 윈도가 풀립니다.
+# 무효화 대상에 절대 넣지 않습니다.
+#
+# **모든 카운터 연산은 정확히 한 키만 건드립니다.** 그래서 ElastiCache cluster mode 용
+# 해시 태그(`{}`)가 필요 없습니다 — 같은 슬롯을 요구하는 것은 multi-key 연산뿐입니다.
+
+
+def budget_usage_counter(scope: str, scope_id: str, period: str) -> str:
+    """월 소진 누적액. `period` 는 UTC 기준 `YYYY-MM`."""
+    return f"budget:usage:{scope.lower()}:{scope_id}:{period}"
+
+
+def rate_limit_counter(scope: str, scope_id: str, model_alias: str, window: str) -> str:
+    """집행 카운터.
+
+    `window` 가 한도 종류를 함께 담습니다 — `rpm:{분}` / `tpm:{분}` / `conc`. rpm 과 tpm 이
+    같은 분에 같은 키를 쓰면 안 되는데, 자리를 하나 더 늘리면 backend 의 4인자 헬퍼와
+    형태가 갈립니다(docs/08).
+    """
+    return f"rl:{scope.lower()}:{scope_id}:{model_alias}:{window}"

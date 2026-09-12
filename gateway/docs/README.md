@@ -18,7 +18,8 @@ client의 API 진입점부터 Bedrock/Mantle 호출까지의 경로를 다섯 �
 | [04-backend-routing.md](04-backend-routing.md) | 백엔드 라우팅 — 모델 alias 해석, 리전, provider 선택 |
 | [05-provider-invocation.md](05-provider-invocation.md) | Bedrock / Mantle 호출 — adapter, 자격 증명, 사용량 추출 |
 | [06-contract-response.md](06-contract-response.md) | backend 회신(09 문서)의 Q1~Q5에 대한 gateway 답변 |
-| [07-endpoint-and-wire-format.md](07-endpoint-and-wire-format.md) | Bedrock 엔드포인트 지형, 인증 서술 정정, GPT 계열 지원(M7 후보) |
+| [07-endpoint-and-wire-format.md](07-endpoint-and-wire-format.md) | Bedrock 엔드포인트 지형, 인증 서술 정정, GPT 계열 지원(M9 후보) |
+| [08-enforcement.md](08-enforcement.md) | 예산·rate limit 집행 — 집행 위치, 카운터 키 규약, tpm 정산, 실패 정책 |
 
 ## Objective
 
@@ -40,7 +41,6 @@ gateway는 **정책을 소유하지 않고 읽어서 집행만 하는** 프록�
 Client ──HTTP──────▶│ RequestContext   request_id 발급, 타이머 시작        │
                     │ ClientIdentify   UA/헤더 → client 태그 (실패 못함)   │
                     │ Auth (VK)        Bearer → AuthContext (fail-closed) │
-                    │ [Phase 4] Budget → RateLimit                        │
                     └──────────────────┬──────────────────────────────────┘
                                        ▼
         ┌────────────── router (/v1/messages | /v1/chat/completions) ──────────┐
@@ -48,15 +48,20 @@ Client ──HTTP──────▶│ RequestContext   request_id 발급, �
         │ 2. ModelResolve    alias → ModelConfig  (Redis → PostgreSQL)         │
         │ 3. DialectCheck    모델의 supported_dialects 확인                     │
         │ 4. ScopeCheck      허용 모델 3층 해석 결과와 대조                      │
+        │ 4a. Budget         예산 조회 → 초과 판정 (읽기만 함)                   │
+        │ 4b. RateLimit      rpm → tpm → concurrency (카운터가 움직임)          │
         │ 5. Invoke          provider adapter 호출 (non-stream / stream)       │
         │ 6. Serialize       내부 이벤트 → 방언 응답 / SSE                      │
-        │ 7. Finalize        TokenUsage 확정 → usage 이벤트 기록                │
+        │ 7. Finalize        usage 이벤트 + 예산 누적 + tpm 정산 + 슬롯 반납     │
         └──────────────────────────────────────────────────────────────────────┘
                                        ▼
                      Amazon Bedrock (boto3)  |  Bedrock Mantle (HTTPS + bearer)
 ```
 
 - 1~4단계는 provider를 모르고, 5단계는 방언을 모릅니다. 이 두 방향의 무지가 이 설계의 핵심입니다.
+- **집행(4a·4b)은 미들웨어가 아니라 라우터 단계입니다.** 초안은 미들웨어 자리를 비워 뒀지만
+  둘 다 `model_alias`와 `max_tokens`를 알아야 하고, 그것은 본문을 파싱해야 나옵니다. 미들웨어가
+  본문을 읽으면 라우터가 다시 읽지 못합니다. 상세는 [08](08-enforcement.md).
 - 7단계는 **provider 호출이 일어난 요청**에 대해 성공·실패·중단을 가리지 않고 항상 실행됩니다.
   4단계 이전에 거절된 요청은 `usage.auth_events`로 따로 갑니다 (아래 usage 계약 참조).
 
@@ -97,7 +102,12 @@ gateway/
 │   ├── core/
 │   │   ├── normalized.py       NormalizedRequest / StreamEvent / TokenUsage
 │   │   ├── errors.py           내부 오류 코드(C6) + 방언별 매핑
+│   │   ├── cache_keys.py       Redis 키를 만드는 단일 지점
 │   │   └── context.py          RequestContext, AuthContext
+│   ├── policy/                 순수 판정 (I/O 없음)
+│   │   ├── allowed_models.py   허용 모델 3층 해석
+│   │   ├── budget.py           예산 초과 판정
+│   │   └── rate_limits.py      rate limit 두 축 해석
 │   ├── middleware/
 │   │   ├── request_context.py
 │   │   ├── client_id.py
@@ -106,6 +116,8 @@ gateway/
 │   │   ├── auth_service.py     VK 해석 + 허용 모델 3층 해석 + 캐시
 │   │   ├── client_identifier.py
 │   │   ├── model_resolver.py   alias → ModelConfig
+│   │   ├── budget_service.py   예산 조회·집행·소진 누적
+│   │   ├── rate_limit_service.py   설정 해석 + 카운터 (선차감·정산·반납)
 │   │   ├── usage_recorder.py   usage_events INSERT + 스풀
 │   │   └── auth_event_recorder.py  auth_events INSERT
 │   ├── providers/
@@ -136,7 +148,7 @@ gateway/
 |---|---|---|
 | `auth` | SELECT + `virtual_keys.last_used_at` UPDATE | VK 인증, 소유자 확인 |
 | `model` | SELECT | alias·단가·허용 모델·rate limit 설정 조회 |
-| `budget` | SELECT + `budget_usages` UPSERT | 예산 조회·차감 (Phase 4) |
+| `budget` | SELECT + `budget_usages` UPSERT | 예산 조회, 소진 누적 |
 | `usage` | `usage_events` INSERT / SELECT | 사용량 기록 |
 | `audit` | **접근 없음** | — |
 
@@ -168,8 +180,8 @@ gateway/
 | `vk:auth:{key_hash}` | 인증 컨텍스트 JSON | 300s | 양쪽 합의 |
 | `policy:model:{alias}` | 모델 해석 + 현재 단가 (`pricing_id` 포함) | 300s | 양쪽 합의 |
 | `policy:allowed_models:{scope}:{id}` | 허용 모델 목록 (`scope ∈ {team, user}`) | 300s | 양쪽 합의 |
-| `policy:budget:{scope}:{id}` | 예산 설정 (Phase 4) | 300s | 양쪽 합의 |
-| `policy:ratelimit:{scope}:{id}:{alias\|*}` | rate limit 설정 (Phase 4) | 300s | 양쪽 합의 |
+| `policy:budget:{scope}:{id}` | 예산 설정 **또는 미설정 표식** | 300s | 양쪽 합의 |
+| `policy:ratelimit:{scope}:{id}:{alias\|*}` | rate limit 설정 **또는 미설정 표식** | 300s | 양쪽 합의 |
 | `policy:model:list` | 카탈로그의 ACTIVE alias 목록 | 300s | 양쪽 합의 ([06](06-contract-response.md) Q1) |
 
 `policy:model:list`는 `/v1/models` 응답의 재료이면서 동시에 **허용 모델 3층 해석에서 "team 층
@@ -185,19 +197,24 @@ backend가 이 키를 지웁니다. 상태 전환만 트리거로 잡으면 `sup
 
 **집행 카운터 — gateway 전용. backend는 읽기만**
 
-| 키 | 용도 |
-|---|---|
-| `budget:usage:{scope}:{scope_id}:{period}` | 월 소진 누적액 |
-| `rl:{scope}:{scope_id}:{model_alias}:{window}` | rate limit 윈도 카운터 |
+| 키 | 용도 | TTL |
+|---|---|---|
+| `budget:usage:{scope}:{scope_id}:{period}` | 월 소진 누적액 (`period` = UTC `YYYY-MM`) | 62일 |
+| `rl:{scope}:{scope_id}:{model_alias}:rpm:{분}` | 분당 요청 수 | 120s |
+| `rl:{scope}:{scope_id}:{model_alias}:tpm:{분}` | 분당 토큰 수 (선차감 → 정산) | 120s |
+| `rl:{scope}:{scope_id}:{model_alias}:conc` | 진행 중 요청 수 | 리스 TTL |
+
+`{분}`은 `floor(unix_seconds / 60)`이고, `{scope}`는 **이긴 설정의 scope**입니다. 상세는
+[08](08-enforcement.md).
 
 - 모든 정책 캐시에 **TTL 상한**을 둡니다. 무효화 실패의 영향이 "영구 불일치"가 아니라
   "TTL만큼의 반영 지연"에 머물러야 한다는 backend의 요구사항을 이 값이 충족합니다.
 - 키 해시(`key_hash`)는 VK 원문의 SHA-256 hex입니다. **원문은 로그·캐시·메트릭 어디에도 남기지 않습니다.**
 - 캐시 miss는 정상 경로입니다. Redis가 없어도 DB로 내려가 동작해야 하며, DB도 없으면 그때 거절합니다.
-- **미해결 항목**: ElastiCache cluster mode에서 multi-key Lua는 같은 슬롯을 요구합니다. 위 정책 캐시는
-  전부 단일 키 연산이라 문제가 없지만, Phase 4의 집행 카운터는 엔터티 id를 `{}`로 감싸야 할 수
-  있습니다(`rl:user:{...}:...`). 카운터 키의 최종 형태는 Phase 4에서 확정하며, 그때 backend의
-  `cache_keys.rate_limit_counter()`와 함께 갱신합니다.
+- **종결된 항목 — 해시 태그를 쓰지 않습니다.** cluster mode가 같은 슬롯을 요구하는 것은 multi-key
+  연산뿐이라, 반대 방향에서 제약을 없앴습니다: **모든 카운터 연산이 정확히 한 키만 건드립니다.**
+  그 결과 키 이름이 배포 토폴로지에 묶이지 않고, backend의 `cache_keys.rate_limit_counter()`도
+  시그니처 변경 없이 그대로 씁니다. 근거와 대가는 [08](08-enforcement.md).
 
 ### usage 기록
 
@@ -295,9 +312,9 @@ gateway 브랜치의 응답입니다.
 | C1 인증 통과 조건과 상태 전이 | **수용.** `status ∈ {ACTIVE, ROTATED}` + `expires_at` + 소유자 `is_active` |
 | C2 캐시 키 이름 | **수용.** `policy:*` 네임스페이스 채택. gateway 전용 키 2종 추가 통보 |
 | C2 TTL 상한 | **확정.** 정책 캐시 300s(`policy:model:list` 포함), `vk:miss` 30s |
-| C2 집행 카운터 키 이름 | **조건부 수용.** Phase 4에서 cluster mode hash tag 필요 여부 확정 |
+| C2 집행 카운터 키 이름 | **확정.** 해시 태그 없음 — 모든 카운터 연산이 단일 키입니다 ([08](08-enforcement.md)) |
 | C3 허용 모델 3층 해석 | **수용.** backend의 `policy/allowed_models.resolve()`와 동일 규칙 구현 |
-| C3 예산 / rate limit 해석 | **수용** (집행은 Phase 4) |
+| C3 예산 / rate limit 해석 | **수용.** 집행까지 구현 완료 ([08](08-enforcement.md)) |
 | C4 DB 역할과 권한 범위 | **수용.** S4 반영 시 `usage.auth_events` INSERT GRANT 추가 필요 |
 | C5 usage 이벤트 컬럼 | **수용 + S3.** 기록 경로는 gateway 직접 INSERT로 확정 |
 | C5 429를 기록하지 않음 | **확장 수용.** 401/403/429 전부 `usage_events` 제외, `auth_events`로 (S4) |
@@ -313,21 +330,23 @@ gateway 브랜치의 응답입니다.
 | M4 | Bedrock 호출 + Anthropic Messages 방언 (non-stream → stream) ([01](01-api-entrypoint.md), [05](05-provider-invocation.md)) | 실제 추론 응답 |
 | M5 | OpenAI 호환 방언 + usage/auth 이벤트 기록 | 두 방언 + 관측 완성 |
 | M6 | Mantle adapter (S1·S2 반영 후) | 두 백엔드 완성 |
-| M7 *(후보)* | OpenAI Chat Completions wire adapter — GPT 계열 지원 ([07](07-endpoint-and-wire-format.md)) | Anthropic 계열 밖의 모델 호출 |
+| M7 | 예산 집행 + 소진 누적 ([08](08-enforcement.md)) | 월 총량 게이트 |
+| M8 | rate limit 집행 — rpm·tpm·concurrency ([08](08-enforcement.md)) | 분 단위 속도 게이트 |
+| M9 *(후보)* | OpenAI Chat Completions wire adapter — GPT 계열 지원 ([07](07-endpoint-and-wire-format.md)) | Anthropic 계열 밖의 모델 호출 |
 
 방언은 순차적으로 붙입니다. 내부 표현과 adapter 경계를 먼저 세우는 순서를 지킵니다
 ([ADR-0003](../../docs/adr-0003-client-api-dialects.md) Follow-up).
 M6은 backend의 스키마 변경(S1·S2)에 의존하므로 마지막에 둡니다.
 
-M7은 **착수가 확정되지 않은 후보**입니다. 선행 조건은 스키마가 아니라 "GPT 계열을 사내에 열
-것인가"라는 제품 결정이고, 순서는 Phase 4 뒤입니다. 상세와 ADR 후보는
+M7·M8이 Phase 4입니다. 예산을 먼저 붙이는 이유는 집행 자리(4a·4b)와 Finalize의 누적 경로를
+예산이 먼저 세우고, rate limit이 그 위에 카운터만 얹기 때문입니다.
+
+M9는 **착수가 확정되지 않은 후보**입니다. 선행 조건은 스키마가 아니라 "GPT 계열을 사내에 열
+것인가"라는 제품 결정이고, 순서는 Phase 4 뒤라 번호도 뒤입니다. 상세와 ADR 후보는
 [07](07-endpoint-and-wire-format.md)에 있습니다.
 
-> **현황(2026-09-12)**: M1~M6 구현 완료. 남은 것은 실제 PostgreSQL·Redis·Bedrock을 붙인
-> 통합 테스트와 Phase 4입니다. 진행 상태는 [gateway/README.md](../README.md)에 있습니다.
-
-Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이지만, 미들웨어 자리와 Redis 키
-네임스페이스는 지금 비워 둡니다.
+> **현황(2026-09-13)**: M1~M8 구현 완료. 남은 것은 실제 PostgreSQL·Redis·Bedrock을 붙인
+> 통합 테스트입니다. 진행 상태는 [gateway/README.md](../README.md)에 있습니다.
 
 ## Failure Policy
 
@@ -340,6 +359,8 @@ Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이
 | 허용 모델 해석 | DB로 우회 | 캐시 hit만 통과, miss는 503 | **거절 (503)** |
 | client 식별 | 영향 없음 | 영향 없음 | 영향 없음 (`other`) |
 | 모델 해석 | DB로 우회 | 캐시 hit만 통과 | 거절 (503) |
+| 예산 집행 | `budget_usages`로 우회 | Redis 카운터로 계속 | **통과 + 경고** |
+| rate limit 집행 | **통과 + 경고** | 영향 없음 | **통과 + 경고** |
 | usage 기록 | 영향 없음 | 메모리 스풀 후 재시도 | 스풀 한도까지 보관 |
 
 - 인증·허용 모델·모델 해석은 **fail-closed**입니다. 확인 못 한 키와 모델을 통과시키지 않습니다.
@@ -347,10 +368,15 @@ Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이
   답하면 client는 멀쩡한 키를 로테이션합니다.
 - client 식별은 **fail-open**입니다. 실패해도 `other`로 떨어질 뿐입니다.
   이 비대칭은 의도된 것입니다 — 앞의 셋은 보안·과금 게이트이고, 뒤는 관측 라벨입니다.
+- **집행(예산·rate limit)도 fail-open**입니다. 인증과 갈리는 기준은 "막지 못했을 때 무엇을
+  잃는가"입니다. 확인 못 한 키를 통과시키면 손실에 상한이 없지만, 확인 못 한 예산은 장애
+  시간만큼의 초과 지출이고 그 비용은 `usage_events`에 그대로 남습니다. fail-closed로 두면
+  Redis 순단이 전사 LLM 장애가 됩니다. 상세는 [08](08-enforcement.md).
 
 ## Non-Goals
 
-- 예산·rate limit 집행, 사용량 집계, 대시보드 — Phase 4
+- 사용량 집계, 대시보드·리더보드 — 집계 테이블은 backend가 씁니다
+- 429 거절 이력의 영속화, 예산 임계 알림 발송 — [08](08-enforcement.md)의 범위 밖 항목
 - **client별 routing profile** — backend에 `routing_profiles` 테이블이 없고, 리전은
   `model_aliases.region`이 이미 갖고 있습니다. client별 백엔드·계정·기본 모델 강제를 요구하는
   사례가 아직 없어 만들지 않습니다. 상세는 [04](04-backend-routing.md).
