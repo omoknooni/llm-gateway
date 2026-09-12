@@ -16,8 +16,9 @@ const SECURITY_HEADERS = [
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      // Next 의 인라인 부트스트랩 스크립트 때문에 unsafe-inline 이 필요합니다.
-      "script-src 'self' 'unsafe-inline'",
+      // 인라인 부트스트랩과 개발 모드의 Webpack 소스맵 실행을 허용합니다.
+      // unsafe-eval 은 개발 서버에서만 필요하며 프로덕션에는 포함하지 않습니다.
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self' data:",
