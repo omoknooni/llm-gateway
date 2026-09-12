@@ -22,6 +22,7 @@ client의 API 진입점. Virtual Key 인증, 정책 집행, Bedrock 호출 프�
 | [docs/04-backend-routing.md](docs/04-backend-routing.md) | 모델 alias 해석, 리전, provider 선택 |
 | [docs/05-provider-invocation.md](docs/05-provider-invocation.md) | Bedrock / Mantle adapter, 자격 증명 |
 | [docs/06-contract-response.md](docs/06-contract-response.md) | backend 회신(Q1~Q5)에 대한 답변과 확정 사항 |
+| [docs/07-endpoint-and-wire-format.md](docs/07-endpoint-and-wire-format.md) | Bedrock 엔드포인트 지형, 인증 서술 정정, GPT 계열 지원(M7 후보) |
 
 ## 실행
 
@@ -53,7 +54,13 @@ cp .env.example .env          # DATABASE_URL 은 gateway_app 역할입니다
 | M3 | 모델 카탈로그 해석, 리전 접두사 재작성 | 완료 |
 | M4 | 내부 표현, Anthropic Messages 방언, Bedrock 호출 | 완료 |
 | M5 | OpenAI 호환 방언, usage / auth 이벤트 기록 | 완료 |
-| M6 | Mantle adapter | 완료 (backend 의 S1·S2 마이그레이션 적용 후 사용 가능) |
+| M6 | Mantle adapter | 완료 (backend 의 S1·S2 마이그레이션 반영됨) |
+| M7 | OpenAI Chat Completions wire adapter — GPT 계열 | **후보 · 미착수** |
 
 **남은 것**: 실제 PostgreSQL·Redis·Bedrock 을 붙인 통합 테스트, Phase 4(예산·rate limit 집행).
 현재 테스트는 외부 의존성 없이 도는 범위까지입니다.
+
+M7 은 착수가 확정되지 않은 후보입니다. 지금 두 adapter 는 전송 방식만 다를 뿐 **본문은 모두
+Anthropic Messages** 라, Anthropic 계열 밖의 모델(GPT 등)은 어느 엔드포인트로도 호출하지 못합니다.
+막는 것이 엔드포인트가 아니라 wire format 이라는 판단의 근거는
+[docs/07](docs/07-endpoint-and-wire-format.md) 에 있습니다.

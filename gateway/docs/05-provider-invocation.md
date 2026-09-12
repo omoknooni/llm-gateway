@@ -6,25 +6,29 @@
 받아 provider의 wire 형식으로 직렬화하고, 응답을 내부 표현(`ProviderResponse` / `StreamEvent`)으로
 되돌립니다.
 
-두 백엔드는 전송 방식부터 다릅니다.
+두 백엔드는 **엔드포인트와 IAM 네임스페이스**가 다릅니다.
 
 | | Bedrock (native) | Bedrock Mantle |
 |---|---|---|
-| `model.provider` 값 | `BEDROCK` | `BEDROCK_MANTLE` (**S1: 추가 요청 중**) |
-| 전송 | boto3 `bedrock-runtime` (동기, SigV4) | HTTPS + Bearer 토큰 (async httpx) |
-| 엔드포인트 | AWS SDK가 해석 | `model_aliases.endpoint_url` (**S2: 추가 요청 중**) |
+| `model.provider` 값 | `BEDROCK` | `BEDROCK_MANTLE` (S1 — 마이그레이션 `0004` 반영 완료) |
+| 엔드포인트 | AWS SDK가 해석 | `model_aliases.endpoint_url` (S2 — 마이그레이션 `0005` 반영 완료) |
 | 본문 | Bedrock native (`anthropic_version` 포함) | 표준 Anthropic Messages |
-| 자격 증명 | IRSA credential chain | IRSA 자격 → 단기 bearer |
 | IAM 네임스페이스 | `bedrock:*` | **`bedrock-mantle:*`** |
+| 전송 — *우리의 선택* | boto3 (동기) | async httpx |
+| 자격 증명 — *우리의 선택* | IRSA credential chain (SigV4) | IRSA 자격 → 단기 bearer |
 
-마지막 줄은 실전에서 가장 많이 틀리는 지점입니다. Mantle은 `bedrock:`이 아니라 **별개의
+IAM 네임스페이스는 실전에서 가장 많이 틀리는 지점입니다. Mantle은 `bedrock:`이 아니라 **별개의
 `bedrock-mantle:` 서비스 네임스페이스**를 씁니다. `bedrock:InvokeModel`만 준 role로 Mantle을 부르면
 403이 납니다.
 
-> **Mantle은 M6입니다.** backend 스키마에 S1(enum 값)과 S2(endpoint 컬럼)가 반영되기 전에는
-> Mantle 모델을 카탈로그에 등록할 수 없습니다. 그전까지는 Bedrock native만 구현하고, adapter
-> 경계와 registry는 지금 세워 둡니다. 두 항목의 상세는 [docs/README.md](README.md)의
-> "backend에 요청하는 스키마 변경"에 있습니다.
+> **마지막 두 줄은 엔드포인트의 속성이 아니라 우리가 고른 것입니다.** 공식 문서 기준으로 두
+> 엔드포인트 **모두** SigV4와 Bedrock API key(bearer)를 지원합니다. runtime을 bearer로 부를 수도,
+> Mantle을 SigV4로 부를 수도 있습니다. 초판이 이 둘을 필연처럼 적어 둔 것을 2026-09-12에
+> 정정했습니다 — 근거와 상세는 [07](07-endpoint-and-wire-format.md).
+
+> **M6 완료.** S1·S2가 backend 마이그레이션 `0004`·`0005`로 반영되어 Mantle 모델을 카탈로그에
+> 등록할 수 있습니다. 어느 엔드포인트로 나갈지는 alias 행의 값이지 코드 분기가 아니므로,
+> 모델을 한쪽에서 다른 쪽으로 옮기는 데 재배포가 필요 없습니다 ([04](04-backend-routing.md)).
 
 ## ProviderAdapter
 
@@ -135,6 +139,8 @@ invoke_stream: client.invoke_model_with_response_stream(...) → EventStream
 `Converse` API 대신 `InvokeModel`을 씁니다. Anthropic Messages 방언이 Bedrock native 본문과 거의
 1:1이라 변환 손실이 가장 적고, `cache_control`·`thinking` 같은 모델 고유 필드가 그대로 지나가기
 때문입니다. 모델군이 늘어 공통 표면이 필요해지면 그때 `Converse` adapter를 **추가**합니다.
+Anthropic 계열 밖(GPT 등)을 받는 시점에 이 판단을 다시 꺼내게 되는데, 그때도 Converse보다
+OpenAI Chat Completions wire가 먼저입니다 — 근거는 [07](07-endpoint-and-wire-format.md).
 
 ### 오류 매핑
 

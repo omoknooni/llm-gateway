@@ -18,6 +18,7 @@ client의 API 진입점부터 Bedrock/Mantle 호출까지의 경로를 다섯 �
 | [04-backend-routing.md](04-backend-routing.md) | 백엔드 라우팅 — 모델 alias 해석, 리전, provider 선택 |
 | [05-provider-invocation.md](05-provider-invocation.md) | Bedrock / Mantle 호출 — adapter, 자격 증명, 사용량 추출 |
 | [06-contract-response.md](06-contract-response.md) | backend 회신(09 문서)의 Q1~Q5에 대한 gateway 답변 |
+| [07-endpoint-and-wire-format.md](07-endpoint-and-wire-format.md) | Bedrock 엔드포인트 지형, 인증 서술 정정, GPT 계열 지원(M7 후보) |
 
 ## Objective
 
@@ -237,19 +238,23 @@ finalize (응답 반환 직전)        cost 계산, TokenUsage 확정, 메트릭
 | `latency_ms` / `ttft_ms` / `is_streaming` | 요청 계측값 |
 | `estimated_cost_usd` / `pricing_id` | 기록 시점 단가로 계산하고, 쓴 단가 행을 남김 |
 | `error_code` | 실패 시 내부 오류 코드(C6) |
-| `client` | **추가 요청 중** — 아래 스키마 변경 요청 참조 |
+| `client` | 도구별 사용량 분해용 (S3 — 반영 완료) |
 
 **정책 거절은 `usage.auth_events`로 갑니다.** provider 호출이 없었으므로 비용도 토큰도 없고,
 집계 테이블에 0 행을 대량으로 만들면 대시보드 쿼리가 전부 이를 걸러내야 합니다.
 
 ## backend에 요청하는 스키마 변경
 
-Phase 1 종료 시점 스키마에는 없지만 gateway 구현에 필요한 항목입니다. **공유 계약 변경**이므로
-backend 브랜치와 합의한 뒤 backend의 마이그레이션으로 반영합니다.
+Phase 1 종료 시점 스키마에는 없지만 gateway 구현에 필요했던 항목입니다. **공유 계약 변경**이므로
+backend 브랜치와 합의한 뒤 backend의 마이그레이션으로 반영했습니다.
+
+> **S1~S4 전부 반영 완료.** backend 마이그레이션 `0004_add_mantle_provider.py`·
+> `0005_gateway_schema_requests.py`와 `db/grants/01_table_grants.sql`(`usage.auth_events` INSERT,
+> `budget.budget_usages` UPSERT)에 들어 있습니다. 아래 표는 무엇을 왜 요청했는지의 기록으로 남깁니다.
 
 | # | 변경 | 이유 | 영향 |
 |---|---|---|---|
-| S1 | `model.provider` enum에 `BEDROCK_MANTLE` 값 추가 | Mantle은 전송 방식과 IAM 네임스페이스가 다른 별도 백엔드 ([05](05-provider-invocation.md)) | enum 값 추가 |
+| S1 | `model.provider` enum에 `BEDROCK_MANTLE` 값 추가 | Mantle은 엔드포인트와 IAM 네임스페이스가 다른 별도 백엔드 ([05](05-provider-invocation.md)) | enum 값 추가 |
 | S2 | `model.model_aliases.endpoint_url` (text NULL) 추가 | Mantle 엔드포인트는 모델별 속성. 카탈로그 밖에 두면 운영자가 콘솔에서 볼 수 없음 | 컬럼 추가 |
 | S3 | `usage.usage_events.client` (text NULL) 추가 | 도구별 사용량 분해 ([03](03-client-identification.md)) | 컬럼 추가 |
 | S4 | `usage.auth_events` 테이블 신설 | VK 문서의 "성공/실패 인증 이벤트" 감사 요구 | 테이블 추가 |
@@ -308,12 +313,17 @@ gateway 브랜치의 응답입니다.
 | M4 | Bedrock 호출 + Anthropic Messages 방언 (non-stream → stream) ([01](01-api-entrypoint.md), [05](05-provider-invocation.md)) | 실제 추론 응답 |
 | M5 | OpenAI 호환 방언 + usage/auth 이벤트 기록 | 두 방언 + 관측 완성 |
 | M6 | Mantle adapter (S1·S2 반영 후) | 두 백엔드 완성 |
+| M7 *(후보)* | OpenAI Chat Completions wire adapter — GPT 계열 지원 ([07](07-endpoint-and-wire-format.md)) | Anthropic 계열 밖의 모델 호출 |
 
 방언은 순차적으로 붙입니다. 내부 표현과 adapter 경계를 먼저 세우는 순서를 지킵니다
 ([ADR-0003](../../docs/adr-0003-client-api-dialects.md) Follow-up).
 M6은 backend의 스키마 변경(S1·S2)에 의존하므로 마지막에 둡니다.
 
-> **현황(2026-09-06)**: M1~M6 구현 완료. 남은 것은 실제 PostgreSQL·Redis·Bedrock을 붙인
+M7은 **착수가 확정되지 않은 후보**입니다. 선행 조건은 스키마가 아니라 "GPT 계열을 사내에 열
+것인가"라는 제품 결정이고, 순서는 Phase 4 뒤입니다. 상세와 ADR 후보는
+[07](07-endpoint-and-wire-format.md)에 있습니다.
+
+> **현황(2026-09-12)**: M1~M6 구현 완료. 남은 것은 실제 PostgreSQL·Redis·Bedrock을 붙인
 > 통합 테스트와 Phase 4입니다. 진행 상태는 [gateway/README.md](../README.md)에 있습니다.
 
 Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이지만, 미들웨어 자리와 Redis 키
@@ -348,5 +358,9 @@ Phase 4(예산·rate limit 집행, 집계)는 이 문서 묶음의 범위 밖이
 - cross-account 호출 — role ARN을 둘 자리가 스키마에 없습니다. 필요해지면 ADR로 다룹니다.
 - 모델 비교 실험 환경(playground)
 - 비 Bedrock provider 확장 — adapter 추상화만 유지하고 구현하지 않음
+- **Anthropic 계열 밖의 모델(GPT 등)** — Bedrock 안이므로 위 항목과 다른 건입니다. 막는 것은
+  엔드포인트가 아니라 wire format 축이 없다는 사실이고, M7 후보로 분리했습니다
+  ([07](07-endpoint-and-wire-format.md))
+- Responses API 방언 — 상태 저장이 기본값이라 데이터 보존 정책이 선행 조건 ([07](07-endpoint-and-wire-format.md))
 - 서버사이드 web search, 모델 자동 강등(downgrade), 가용성 fallback 체인 —
   참조 구현에는 있으나 이번 범위에서 제외. adapter/router 경계가 나중에 이들을 받을 수 있게만 둡니다.
