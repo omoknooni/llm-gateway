@@ -1,8 +1,14 @@
 import {
+  AlertLevel,
   ApiDialect,
+  BudgetPolicy,
   ModelStatus,
+  RateLimitScope,
   ResolvedFrom,
   RevokeReason,
+  TrendGranularity,
+  UsageAxis,
+  UsageMetric,
   UserRole,
   VKOwnerType,
   VKStatus,
@@ -92,4 +98,84 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
 
 export function auditActionLabel(action: string): string {
   return AUDIT_ACTION_LABEL[action] ?? action;
+}
+
+// ── 예산·rate limit·사용량 (backend M6~M8) ────────────────────────────────────
+
+export const ALERT_LEVEL_LABEL: Record<AlertLevel, string> = {
+  [AlertLevel.NORMAL]: '정상',
+  [AlertLevel.WARNING]: '경고',
+  [AlertLevel.CRITICAL]: '위험',
+  [AlertLevel.EXCEEDED]: '초과',
+};
+
+export const ALERT_LEVEL_TONE: Record<AlertLevel, Tone> = {
+  [AlertLevel.NORMAL]: 'success',
+  [AlertLevel.WARNING]: 'warning',
+  [AlertLevel.CRITICAL]: 'warning',
+  [AlertLevel.EXCEEDED]: 'danger',
+};
+
+export const BUDGET_POLICY_LABEL: Record<BudgetPolicy, string> = {
+  [BudgetPolicy.HARD_BLOCK]: '초과 시 차단',
+  [BudgetPolicy.SOFT_WARN]: '초과 시 경고만',
+};
+
+/**
+ * 소진값 출처. **숨기지 않습니다** — Redis 는 집행에 쓰이는 실시간 값이고 DB 는 집계된
+ * 내구 사본입니다. 둘이 갈라진 상태를 운영자가 알아야 재시드를 판단할 수 있습니다.
+ */
+export function usageSourceLabel(source: string): string {
+  if (source === 'redis') return '실시간(집행 카운터)';
+  if (source === 'db') return '집계값(DB)';
+  if (source === 'mixed') return '혼재';
+  return source;
+}
+
+export const RATE_LIMIT_SCOPE_LABEL: Record<RateLimitScope, string> = {
+  [RateLimitScope.GLOBAL]: '전역',
+  [RateLimitScope.TEAM]: '팀',
+  [RateLimitScope.USER]: '사용자',
+  [RateLimitScope.VIRTUAL_KEY]: 'Virtual Key',
+};
+
+export const LIMIT_FIELD_LABEL: Record<string, string> = {
+  rpm_limit: 'RPM',
+  tpm_limit: 'TPM',
+  concurrency_limit: '동시 실행',
+};
+
+export const USAGE_AXIS_LABEL: Record<UsageAxis, string> = {
+  [UsageAxis.TEAM]: '팀',
+  [UsageAxis.USER]: '사용자',
+  [UsageAxis.MODEL]: '모델',
+  [UsageAxis.VIRTUAL_KEY]: 'Virtual Key',
+};
+
+export const USAGE_METRIC_LABEL: Record<UsageMetric, string> = {
+  [UsageMetric.COST]: '비용',
+  [UsageMetric.REQUESTS]: '호출 수',
+  [UsageMetric.TOKENS]: '토큰',
+};
+
+export const TREND_GRANULARITY_LABEL: Record<TrendGranularity, string> = {
+  [TrendGranularity.DAY]: '일',
+  [TrendGranularity.MONTH]: '월',
+};
+
+/**
+ * 정책 거절 사유. **값 집합의 소유자는 gateway 입니다**(backend 09 문서) — enum 으로 고정하지
+ * 않고, 모르는 값이 오면 원본을 그대로 보여줍니다.
+ */
+const AUTH_OUTCOME_LABEL: Record<string, string> = {
+  INVALID_KEY: '알 수 없는 키',
+  EXPIRED_KEY: '만료된 키',
+  REVOKED_KEY: '폐기된 키',
+  MODEL_NOT_ALLOWED: '허용되지 않은 모델',
+  BUDGET_EXCEEDED: '예산 초과',
+  RATE_LIMITED: 'rate limit 초과',
+};
+
+export function authOutcomeLabel(outcome: string): string {
+  return AUTH_OUTCOME_LABEL[outcome] ?? outcome;
 }

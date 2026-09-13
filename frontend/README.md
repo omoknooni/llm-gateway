@@ -9,19 +9,21 @@ Admin 서비스의 웹 콘솔. Next.js SSR 앱으로 동작하며 `backend/`의 
 
 ## 구현 범위
 
-backend 로드맵 M1~M5(인증·팀·사용자·Virtual Key·모델 카탈로그)에 대응하는 화면까지 구현되어
-있습니다. 예산·사용량·리더보드·rate limit 화면은 backend M6~M8이 열린 뒤입니다.
-화면별 소비 API와 역할별 접근 권한은 [docs/01-screen-inventory.md](docs/01-screen-inventory.md)에
-있습니다.
+backend 로드맵 M1~M8(인증·팀·사용자·Virtual Key·모델 카탈로그·예산·사용량 집계·rate limit)에
+대응하는 화면이 구현되어 있습니다. 화면별 소비 API와 역할별 접근 권한은
+[docs/01-screen-inventory.md](docs/01-screen-inventory.md)에 있습니다.
 
 | 경로 | 내용 |
 |---|---|
-| `/` | 운영 점검판 — 만료 임박 키, 유휴 키, 단가 누락 모델 |
+| `/` | 운영 점검판 — 만료 임박 키, 유휴 키, 단가 누락 모델, 최근 사용량, 예산 경보 |
 | `/teams`, `/teams/[teamId]` | 팀 CRUD, 팀장 지정, 팀 허용 모델, VK 일괄 폐기 |
 | `/users`, `/users/tree`, `/users/[userId]` | 사용자 CRUD, 팀 이동, 조직 트리, 개인 허용 모델과 실효 모델 |
 | `/keys`, `/keys/[keyId]` | VK 발급·수정·로테이션·폐기, 감사 이력과 로테이션 체인 |
 | `/models`, `/models/[alias]` | 모델 카탈로그, 상태 전환, 단가 시계열 |
-| `/my` | 내 계정, 내 실효 허용 모델, 내 키 |
+| `/usage` | 사용량·비용 합계와 추이, 축별 리더보드, 정책 거절 요약 |
+| `/budgets`, `/budgets/team/[teamId]` | 예산 소진 현황, 미설정 목록, 팀 예산·멤버 배분, 소진값 재시드 |
+| `/rate-limits` | 전역·팀·사용자 한도 설정, 실효값 해석, 실시간 사용률 |
+| `/my` | 내 계정, 내 예산, 내 실효 허용 모델, 내 키 |
 | `/settings/service-tokens`, `/settings/cache` | 서비스 토큰, 캐시 무효화 재시도 |
 
 ## 실행

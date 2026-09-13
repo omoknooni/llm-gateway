@@ -2,11 +2,14 @@
 
 import {
   Boxes,
+  ChartColumn,
+  Gauge,
   KeyRound,
   LayoutDashboard,
   Settings,
   UserRound,
   Users,
+  Wallet,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -28,6 +31,9 @@ const NAV_ITEMS = [
   { href: '/users', label: '사용자', icon: UserRound },
   { href: '/keys', label: 'Virtual Key', icon: KeyRound },
   { href: '/models', label: '모델 카탈로그', icon: Boxes },
+  { href: '/usage', label: '사용량·비용', icon: ChartColumn },
+  { href: '/budgets', label: '예산', icon: Wallet },
+  { href: '/rate-limits', label: 'Rate limit', icon: Gauge },
   { href: '/my', label: '내 정보', icon: UserRound },
   { href: '/settings/service-tokens', label: '설정', icon: Settings },
 ] as const;

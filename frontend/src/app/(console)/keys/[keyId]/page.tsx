@@ -13,17 +13,20 @@ import {
 } from '@/components/ui/card';
 import { MonoId } from '@/components/ui/copy-button';
 import { KeyRowActions } from '@/components/keys/key-row-actions';
+import { LimitFormDialog, LimitValues } from '@/components/rate-limits/limit-form-dialog';
 import { AdminApiError } from '@/lib/api/errors';
+import { getEffectiveLimits, listRateLimits } from '@/lib/api/rate-limits';
 import { getVirtualKey, getVirtualKeyAudit } from '@/lib/api/virtual-keys';
 import { requirePageAccess } from '@/lib/auth/session';
 import { expiryHint, formatDateTime } from '@/lib/format/datetime';
 import {
+  LIMIT_FIELD_LABEL,
   VK_OWNER_TYPE_LABEL,
   VK_STATUS_LABEL,
   VK_STATUS_TONE,
   auditActionLabel,
 } from '@/lib/format/labels';
-import { VKOwnerType, VKStatus } from '@/types/api';
+import { LIMIT_FIELDS, RateLimitScope, VKOwnerType, VKStatus } from '@/types/api';
 
 export const metadata = { title: 'Virtual Key 상세 — llm-gateway Admin' };
 
@@ -43,11 +46,21 @@ export default async function KeyDetailPage({
     throw error;
   }
 
-  // 감사 조회는 ADMIN·TEAM_LEADER 만 통과합니다. 권한이 없으면 화면 나머지는 그대로 보여줍니다.
-  const audit = await getVirtualKeyAudit(keyId).catch((error) => {
+  // 감사·한도 조회는 권한이 갈립니다. 통과하지 못하면 그 카드만 빼고 나머지는 그대로 보여줍니다.
+  const forbiddenToNull = (error: unknown) => {
     if (error instanceof AdminApiError && error.isForbidden) return null;
     throw error;
-  });
+  };
+
+  const [audit, ownLimits, effectiveLimits] = await Promise.all([
+    getVirtualKeyAudit(keyId).catch(forbiddenToNull),
+    listRateLimits({ scope: RateLimitScope.VIRTUAL_KEY, scope_id: keyId }).catch(forbiddenToNull),
+    getEffectiveLimits({ virtual_key_id: keyId }).catch(forbiddenToNull),
+  ]);
+
+  // 모델을 지정하지 않은 한도(= 이 키의 모든 모델)만 이 카드에서 다룹니다. 모델별 한도는
+  // rate limit 화면에서 모델을 골라 설정합니다 — 상세 화면에 축을 둘 다 두면 표가 됩니다.
+  const keyLimit = ownLimits?.items.find((config) => config.model_alias === null) ?? null;
 
   const ownerHref =
     vkey.owner_type === VKOwnerType.TEAM ? `/teams/${vkey.owner_id}` : `/users/${vkey.owner_id}`;
@@ -138,6 +151,54 @@ export default async function KeyDetailPage({
             </div>
           </CardBody>
         </Card>
+
+        {effectiveLimits ? (
+          <Card>
+            <CardHeader
+              title="호출 한도"
+              description="주체 축(키 > 사용자 > 팀)과 전역 축은 따로 집행됩니다. 둘 다 통과해야 요청이 진행됩니다."
+              actions={
+                <LimitFormDialog
+                  scope={RateLimitScope.VIRTUAL_KEY}
+                  scopeId={keyId}
+                  label={vkey.name}
+                  current={keyLimit}
+                  triggerLabel={keyLimit ? '키 한도 수정' : '키 한도 설정'}
+                />
+              }
+            />
+            <CardBody>
+              <div className="mb-3">
+                <p className="text-xs text-muted-foreground">이 키에 직접 걸린 설정</p>
+                <div className="mt-1">
+                  <LimitValues config={keyLimit} />
+                </div>
+              </div>
+              <DescriptionList>
+                {LIMIT_FIELDS.map((field) => {
+                  const subject = effectiveLimits.effective_limits[field];
+                  const globalLimit = effectiveLimits.global_limits[field];
+                  return (
+                    <DescriptionItem key={field} term={`${LIMIT_FIELD_LABEL[field]} 실효값`}>
+                      <span className="num">{subject?.value ?? '정의 없음'}</span>
+                      {subject?.resolved_from ? (
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          {subject.resolved_from} 에서 결정
+                        </span>
+                      ) : null}
+                      {globalLimit?.value != null ? (
+                        <div className="text-xs text-muted-foreground">
+                          전역 축 {globalLimit.value}
+                          {globalLimit.resolved_from ? ` (${globalLimit.resolved_from})` : ''}
+                        </div>
+                      ) : null}
+                    </DescriptionItem>
+                  );
+                })}
+              </DescriptionList>
+            </CardBody>
+          </Card>
+        ) : null}
 
         {audit ? (
           <>

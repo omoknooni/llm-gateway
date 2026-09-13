@@ -4,14 +4,19 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody, CardHeader, PageHeader } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
+import { getBudgetSummary, listUnsetBudgets } from '@/lib/api/budgets';
 import { AdminApiError } from '@/lib/api/errors';
 import { listModelsMissingPricing } from '@/lib/api/models';
+import { getAuthEventSummary, getUsageOverview } from '@/lib/api/usage';
 import { listTeams } from '@/lib/api/teams';
 import { listUsers } from '@/lib/api/users';
 import { listVirtualKeys } from '@/lib/api/virtual-keys';
 import { requirePageAccess } from '@/lib/auth/session';
 import { isoDaysFromNow } from '@/lib/format/datetime';
-import { UserRole, VKStatus, type Page } from '@/types/api';
+import { formatUsd } from '@/lib/format/decimal';
+import { ALERT_LEVEL_LABEL, ALERT_LEVEL_TONE } from '@/lib/format/labels';
+import { defaultRange, formatCount, formatPercent } from '@/lib/format/usage';
+import { AlertLevel, BudgetScope, UserRole, VKStatus, type Page } from '@/types/api';
 
 export const metadata = { title: '대시보드 — llm-gateway Admin' };
 
@@ -27,6 +32,11 @@ export const metadata = { title: '대시보드 — llm-gateway Admin' };
 const EXPIRING_WITHIN_DAYS = 30;
 const IDLE_AFTER_DAYS = 90;
 
+/**
+ * 사용량·예산 카드는 backend M6~M8 이 열린 뒤 붙었습니다. 그래도 첫 화면의 초점은 그대로
+ * **조용히 어긋나 있는 상태**입니다 — 비용 총액보다 실패율·예산 경보·미설정 예산이 먼저입니다.
+ */
+
 /** 목록 API 에 전체 건수가 없습니다. 표시 상한까지 세고, 더 있으면 `+` 를 붙입니다. */
 const COUNT_LIMIT = 200;
 
@@ -38,7 +48,20 @@ export default async function DashboardPage() {
   const session = await requirePageAccess('/');
   const isAdmin = session.role === UserRole.ADMIN;
 
-  const [teams, users, activeKeys, expiringKeys, idleKeys, missingPricing] = await Promise.all([
+  const range = defaultRange();
+
+  const [
+    teams,
+    users,
+    activeKeys,
+    expiringKeys,
+    idleKeys,
+    missingPricing,
+    overview,
+    authEvents,
+    budgets,
+    unsetBudgets,
+  ] = await Promise.all([
     listTeams({ limit: COUNT_LIMIT }),
     listUsers({ limit: COUNT_LIMIT, is_active: true }),
     listVirtualKeys({ status: VKStatus.ACTIVE, limit: COUNT_LIMIT }),
@@ -58,7 +81,25 @@ export default async function DashboardPage() {
           throw error;
         })
       : Promise.resolve([]),
+    getUsageOverview({ from_date: range.from, to_date: range.to }),
+    getAuthEventSummary({ from_date: range.from, to_date: range.to }),
+    // 팀에 소속되지 않은 팀장이면 backend 가 403 입니다. 카드 하나 때문에 첫 화면 전체가
+    // 죽지 않게 여기서만 삼킵니다 — 예산 화면에서는 그대로 드러냅니다.
+    getBudgetSummary({ scope: BudgetScope.TEAM }).catch((error) => {
+      if (error instanceof AdminApiError && error.isForbidden) {
+        return { period: '', source: '', items: [] };
+      }
+      throw error;
+    }),
+    isAdmin
+      ? listUnsetBudgets().catch((error) => {
+          if (error instanceof AdminApiError && error.isForbidden) return { teams: [], users: [] };
+          throw error;
+        })
+      : Promise.resolve({ teams: [], users: [] }),
   ]);
+
+  const alerting = budgets.items.filter((item) => item.alert_level !== AlertLevel.NORMAL);
 
   return (
     <>
@@ -118,24 +159,91 @@ export default async function DashboardPage() {
 
       <Card className="mt-4">
         <CardHeader
-          title="아직 열리지 않은 화면"
-          description="backend 마일스톤이 열리면 이어서 붙습니다."
+          title={`최근 ${EXPIRING_WITHIN_DAYS}일 사용량`}
+          description={`${range.from} ~ ${range.to} (UTC)`}
+          actions={
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/usage">자세히</Link>
+            </Button>
+          }
         />
         <CardBody>
-          <ul className="space-y-1.5 text-sm text-muted-foreground">
-            <li>· 예산 설정과 소진 현황 — backend M6</li>
-            <li>· 사용량·비용 대시보드와 리더보드 — backend M7</li>
-            <li>· rate limit 설정과 실시간 사용률 — backend M8</li>
-          </ul>
-          {isAdmin ? (
-            <div className="mt-3">
-              <Button variant="secondary" size="sm" asChild>
-                <Link href="/settings/cache">캐시 무효화 잔량 확인</Link>
-              </Button>
-            </div>
-          ) : null}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="추정 비용" value={formatUsd(overview.totals.estimated_cost_usd)} />
+            <StatCard label="호출 수" value={formatCount(overview.totals.request_count)} />
+            <StatCard
+              label="실패율"
+              value={formatPercent(overview.totals.failure_rate_pct)}
+              hint="TIMEOUT 도 실패입니다"
+              tone={Number(overview.totals.failure_rate_pct) >= 5 ? 'danger' : 'neutral'}
+            />
+            <StatCard
+              label="정책 거절"
+              value={formatCount(authEvents.total_occurrences)}
+              hint="401·403·429. 키·모델·예산·한도 설정을 의심하세요"
+              tone={authEvents.total_occurrences > 0 ? 'warning' : 'neutral'}
+              href="/usage"
+            />
+          </div>
         </CardBody>
       </Card>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <Card className={alerting.length > 0 ? 'border-warning/40' : ''}>
+          <CardHeader
+            title="예산 경보"
+            description="경보 단계는 각 예산의 임계값으로 backend 가 계산합니다."
+            actions={
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/budgets">예산 화면</Link>
+              </Button>
+            }
+          />
+          <CardBody>
+            {alerting.length === 0 ? (
+              <p className="text-sm text-muted-foreground">경보 중인 팀 예산이 없습니다.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {alerting.map((item) => (
+                  <Link key={item.scope_id} href={`/budgets/team/${item.scope_id}`}>
+                    <Badge tone={ALERT_LEVEL_TONE[item.alert_level]}>
+                      {item.name ?? item.scope_id} · {item.usage_pct}% ·{' '}
+                      {ALERT_LEVEL_LABEL[item.alert_level]}
+                    </Badge>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        {isAdmin ? (
+          <Card className={unsetBudgets.teams.length > 0 ? 'border-danger/35' : ''}>
+            <CardHeader
+              title="예산이 없는 팀"
+              description="미설정은 무제한입니다. 경보가 뜨지 않으니 여기서만 보입니다."
+            />
+            <CardBody>
+              {unsetBudgets.teams.length === 0 ? (
+                <p className="text-sm text-muted-foreground">모든 팀에 예산이 있습니다.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {unsetBudgets.teams.map((team) => (
+                    <Link key={team.id} href={`/budgets/team/${team.id}`}>
+                      <Badge tone="danger">{team.name}</Badge>
+                    </Link>
+                  ))}
+                </div>
+              )}
+              <div className="mt-3">
+                <Button variant="secondary" size="sm" asChild>
+                  <Link href="/settings/cache">캐시 무효화 잔량 확인</Link>
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        ) : null}
+      </div>
     </>
   );
 }
