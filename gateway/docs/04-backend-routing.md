@@ -194,7 +194,8 @@ AuthContext.allowed_model_aliases  ∩  policy:model:list (카탈로그 ACTIVE)
 
 - **가용성 fallback 체인** — 5xx 시 같은 provider의 대체 alias로 재시도
 - **circuit breaker** — 모델별 실패율 기반 차단
-- **예산 기반 모델 강등(downgrade)** — Phase 4의 예산 집행과 함께
+- **예산 기반 모델 강등(downgrade)** — 예산 집행이 붙은 뒤에도 도입하지 않습니다. 사용자가
+  모르는 사이 응답 품질이 바뀝니다 ([08](08-enforcement.md))
 - **cross-account 호출** — role ARN을 둘 자리가 스키마에 없습니다. 필요해지면 그 자리를 만드는
   것부터 ADR로 다룹니다.
 

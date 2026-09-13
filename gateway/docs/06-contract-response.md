@@ -231,6 +231,6 @@ gateway가 사건당 한 행을 INSERT하면 됩니다. 대시보드는 그 구�
 | 항목 | 판단 시점 |
 |---|---|
 | `client`의 집계 축 편입 (Q2 후속) — `daily_client_usage` 신설 여부 | M7 |
-| 스풀 드롭 기록의 최종 형태 (Q5) — `usage.ingest_gaps` | Phase 4 |
-| 집행 카운터 키의 cluster mode hash tag 여부 | Phase 4 |
+| 스풀 드롭 기록의 최종 형태 (Q5) — `usage.ingest_gaps` | 미정 — [08](08-enforcement.md) 의 범위 밖 |
+| ~~집행 카운터 키의 cluster mode hash tag 여부~~ | **종결** — 쓰지 않습니다 ([08](08-enforcement.md)) |
 | `auth_events` / `usage_events`의 파티셔닝·보존 기간 | 실사용 볼륨 확인 후 |

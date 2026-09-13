@@ -22,8 +22,10 @@ from gateway.core.normalized import NormalizedRequest, TokenUsage
 from gateway.core.routing import BackendDecision
 from gateway.dialects.base import load_json
 from gateway.providers.base import ProviderAdapter
+from gateway.services.budget_service import BudgetOutcome
+from gateway.services.rate_limit_service import Reservation
 from gateway.services.streaming import StreamAccumulator
-from gateway.services.usage_recorder import build_record
+from gateway.services.usage_recorder import build_record, calculate_cost
 
 
 class ParsingDialect(Protocol):
@@ -40,14 +42,23 @@ class PreparedCall:
     adapter: ProviderAdapter
     raw: dict[str, Any]
     dialect: ApiDialect
+    #: 4a 의 산출물. 누적 경로가 한도 스냅샷을 여기서 읽습니다(docs/08).
+    budget: BudgetOutcome
+    #: 4b 가 잡아 둔 자원. `finalize` 가 정산·반납합니다.
+    reservation: Reservation
 
 
 async def prepare(
     request: Request, *, dialect: ParsingDialect, api_dialect: ApiDialect
 ) -> PreparedCall:
-    """DialectParse → ModelResolve → ScopeCheck → DialectCheck → adapter 선택.
+    """DialectParse → ModelResolve → ScopeCheck → DialectCheck → Budget → RateLimit → adapter.
 
     실패는 전부 `GatewayError` 로 올라오고, 방언별 라우터가 자기 형식으로 옮깁니다.
+
+    **집행이 여기 있는 이유**는 미들웨어가 `model_alias` 와 `max_tokens` 를 모르기 때문입니다.
+    둘 다 본문을 파싱해야 알 수 있고, 미들웨어에서 본문을 읽으면 라우터가 다시 읽지 못합니다
+    (docs/08). 예산(읽기 전용)을 rate limit(카운터 증가)보다 먼저 보는 것도 계약입니다 —
+    어차피 막힐 요청이 rate limit 윈도를 소모하면 안 됩니다.
     """
     state = request.scope["state"]
     auth: AuthContext = state[STATE_AUTH]
@@ -74,7 +85,29 @@ async def prepare(
     normalized = dialect.parse_data(
         data, default_max_tokens=settings.default_max_output_tokens, model=decision.model
     )
-    adapter = app_state.provider_registry.get(decision.provider)
+
+    # 4a. 예산 — 읽기만 합니다.
+    budget = await app_state.budget_service.evaluate(
+        auth=auth, redis=app_state.redis, session_factory=app_state.session_factory
+    )
+    app_state.budget_service.enforce(budget)
+
+    # 4b. rate limit — 여기서부터 카운터가 움직입니다.
+    reservation = await app_state.rate_limits.charge(
+        auth=auth,
+        request=normalized,
+        model_alias=decision.model.alias,
+        redis=app_state.redis,
+        session_factory=app_state.session_factory,
+    )
+
+    try:
+        adapter = app_state.provider_registry.get(decision.provider)
+    except GatewayError:
+        # 슬롯을 잡아 놓고 나가면 게이지가 샙니다. 잡은 뒤의 모든 실패 경로가 반납을 지나야
+        # 합니다.
+        await app_state.rate_limits.finalize(app_state.redis, reservation, actual_tokens=None)
+        raise
 
     return PreparedCall(
         auth=auth,
@@ -83,6 +116,8 @@ async def prepare(
         adapter=adapter,
         raw=data,
         dialect=api_dialect,
+        budget=budget,
+        reservation=reservation,
     )
 
 
@@ -120,9 +155,20 @@ def record_usage(
     is_streaming: bool,
     error_code: str | None = None,
 ) -> None:
-    """응답을 반환한 뒤 백그라운드로 씁니다. 기록 실패가 client 응답에 영향을 주지 않습니다."""
+    """파이프라인 7단계(Finalize).
+
+    사용량 기록에 더해 **예산 누적·tpm 정산·동시성 반납**이 여기서 일어납니다. 셋을 흩어
+    놓으면 어느 한 경로(스트림 중단, provider 실패)가 그중 하나를 빠뜨립니다. 성공·실패·중단이
+    모두 한 자리를 지나야 누락이 없습니다(docs/08).
+
+    쓰기는 응답을 반환한 뒤 백그라운드로 나갑니다. 기록 실패가 client 응답에 영향을 주지
+    않습니다.
+    """
     ctx: RequestContext = request.scope["state"][STATE_REQUEST]
     app_state = request.app.state
+    app_state.background.spawn(
+        _finalize_enforcement(request, call, usage), name="enforcement_finalize"
+    )
     record = build_record(
         request_id=ctx.request_id,
         auth=call.auth,
@@ -138,6 +184,25 @@ def record_usage(
     )
     app_state.background.spawn(
         app_state.usage_recorder.record(app_state.session_factory, record), name="usage"
+    )
+
+
+async def _finalize_enforcement(
+    request: Request, call: PreparedCall, usage: TokenUsage
+) -> None:
+    """선차감한 tpm 을 실제값으로 정산하고, 슬롯을 반납하고, 소진액을 올립니다."""
+    app_state = request.app.state
+    await app_state.rate_limits.finalize(
+        app_state.redis,
+        call.reservation,
+        actual_tokens=usage.input_tokens + usage.output_tokens,
+    )
+    await app_state.budget_service.accumulate(
+        redis=app_state.redis,
+        session_factory=app_state.session_factory,
+        auth=call.auth,
+        outcome=call.budget,
+        cost=calculate_cost(usage, call.decision.model.pricing),
     )
 
 

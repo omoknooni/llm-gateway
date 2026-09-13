@@ -19,8 +19,12 @@ from gateway.core.dialect import ApiDialect
 __all__ = [
     "ApiDialect",
     "Base",
+    "BudgetPeriod",
+    "BudgetPolicy",
+    "BudgetScope",
     "ModelStatus",
     "Provider",
+    "RateLimitScope",
     "UsageStatus",
     "VKOwnerType",
     "VKStatus",
@@ -53,6 +57,32 @@ class Provider(enum.StrEnum):
 class ModelStatus(enum.StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
+
+
+class BudgetScope(enum.StrEnum):
+    """예산에는 VIRTUAL_KEY 가 없습니다 — VK 는 인증 수단이지 비용 주체가 아닙니다."""
+
+    TEAM = "TEAM"
+    USER = "USER"
+
+
+class BudgetPeriod(enum.StrEnum):
+    MONTHLY = "MONTHLY"
+
+
+class BudgetPolicy(enum.StrEnum):
+    HARD_BLOCK = "HARD_BLOCK"
+    SOFT_WARN = "SOFT_WARN"
+
+
+class RateLimitScope(enum.StrEnum):
+    """예산과 달리 VIRTUAL_KEY 가 있습니다 — 팀 공용 키 하나가 팀 전체 속도를 잡아먹는 것을
+    막아야 합니다(backend 06)."""
+
+    GLOBAL = "GLOBAL"
+    TEAM = "TEAM"
+    USER = "USER"
+    VIRTUAL_KEY = "VIRTUAL_KEY"
 
 
 class UsageStatus(enum.StrEnum):

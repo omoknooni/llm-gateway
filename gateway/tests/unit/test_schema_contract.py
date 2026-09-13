@@ -11,8 +11,11 @@ import pytest
 
 from gateway.schema import (
     AuthEvent,
+    BudgetConfig,
+    BudgetUsage,
     ModelAlias,
     ModelPricing,
+    RateLimitConfig,
     Team,
     TeamAllowedModel,
     UsageEvent,
@@ -45,6 +48,24 @@ EXPECTED = {
             "cache_write_price_per_1k", "cache_read_price_per_1k",
             "effective_from", "effective_until",
         },
+    ),
+    RateLimitConfig: (
+        "model.rate_limit_configs",
+        {
+            "id", "scope", "scope_id", "model_alias",
+            "rpm_limit", "tpm_limit", "concurrency_limit", "is_active",
+        },
+    ),
+    BudgetConfig: (
+        "budget.budget_configs",
+        {
+            "id", "scope", "scope_id", "limit_usd", "period_type", "policy",
+            "warn_thresholds", "is_active",
+        },
+    ),
+    BudgetUsage: (
+        "budget.budget_usages",
+        {"scope", "scope_id", "period", "used_usd", "limit_usd", "updated_at"},
     ),
     TeamAllowedModel: ("model.team_allowed_models", {"team_id", "model_alias"}),
     UserAllowedModel: ("model.user_allowed_models", {"user_id", "model_alias"}),

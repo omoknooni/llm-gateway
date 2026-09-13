@@ -10,7 +10,14 @@ from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
-from gateway.schema.base import ApiDialect, Base, ModelStatus, Provider, pg_enum
+from gateway.schema.base import (
+    ApiDialect,
+    Base,
+    ModelStatus,
+    Provider,
+    RateLimitScope,
+    pg_enum,
+)
 
 
 class ModelAlias(Base):
@@ -78,3 +85,26 @@ class UserAllowedModel(Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     model_alias: Mapped[str] = mapped_column(String(128), primary_key=True)
+
+
+class RateLimitConfig(Base):
+    """활성 행은 `(scope, COALESCE(scope_id, nil), COALESCE(model_alias, '*'))` 당 하나입니다.
+
+    `scope_id` 가 NULL 인 것은 `GLOBAL` 뿐이고, `model_alias` 가 NULL 이면 그 scope 의 모든
+    모델입니다. 세 한도는 각각 NULL 일 수 있으며 **NULL 은 "정의되지 않음"** 이라 해석에서
+    다음 후보로 넘어갑니다(backend 06). 셋 다 NULL 인 행은 DB CHECK 가 막습니다.
+    """
+
+    __tablename__ = "rate_limit_configs"
+    __table_args__ = {"schema": "model"}
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scope: Mapped[RateLimitScope] = mapped_column(
+        pg_enum(RateLimitScope, "rate_limit_scope", "model")
+    )
+    scope_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    model_alias: Mapped[str | None] = mapped_column(String(128))
+    rpm_limit: Mapped[int | None] = mapped_column(Integer)
+    tpm_limit: Mapped[int | None] = mapped_column(Integer)
+    concurrency_limit: Mapped[int | None] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean)

@@ -2,7 +2,11 @@
 
 미들웨어 실행 순서(요청 처리 순):
 
-    RequestContext → ClientIdentify → Auth → [Phase 4] Budget → RateLimit → router
+    RequestContext → ClientIdentify → Auth → router
+
+예산·rate limit 집행은 **미들웨어가 아니라 라우터 파이프라인의 단계**입니다. 둘 다
+`model_alias` 와 `max_tokens` 를 알아야 하는데 그것은 본문을 파싱해야 나오고, 미들웨어에서
+본문을 읽으면 라우터가 다시 읽지 못합니다(docs/08).
 
 Starlette 의 `add_middleware` 는 목록 앞에 삽입하므로 **마지막에 등록한 것이 가장 바깥**입니다.
 즉 등록 순서는 실행 순서의 역순입니다. 순서가 계약인 지점이 있어 아래에 그대로 적어둡니다.
@@ -38,8 +42,10 @@ from gateway.providers.registry import ProviderRegistry
 from gateway.redis_client import create_redis
 from gateway.services.auth_event_recorder import AuthEventRecorder
 from gateway.services.auth_service import AuthService
+from gateway.services.budget_service import BudgetService
 from gateway.services.last_used import LastUsedTracker
 from gateway.services.model_resolver import ModelResolver
+from gateway.services.rate_limit_service import RateLimitService
 from gateway.services.router import Router
 from gateway.services.usage_recorder import UsageRecorder
 
@@ -63,6 +69,8 @@ async def lifespan(app: FastAPI):
     app.state.last_used = LastUsedTracker(settings.last_used_throttle_seconds)
     app.state.usage_recorder = UsageRecorder(settings.usage_spool_max)
     app.state.auth_events = AuthEventRecorder(settings.auth_event_window_seconds)
+    app.state.budget_service = BudgetService(settings)
+    app.state.rate_limits = RateLimitService(settings)
     resolver = ModelResolver(settings)
     app.state.model_resolver = resolver
     app.state.router = Router(settings, resolver)
