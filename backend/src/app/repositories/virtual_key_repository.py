@@ -124,6 +124,13 @@ class VirtualKeyRepository:
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def names_for(self, key_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """id → 키 이름. 리더보드에 UUID 대신 이름을 붙일 때 씁니다."""
+        if not key_ids:
+            return {}
+        stmt = select(VirtualKey.id, VirtualKey.name).where(VirtualKey.id.in_(key_ids))
+        return {row.id: row.name for row in (await self._session.execute(stmt))}
+
     async def count_keys(self, *, team_id: uuid.UUID | None = None, status: VKStatus | None = None) -> int:
         stmt = select(func.count()).select_from(VirtualKey)
         if team_id is not None:

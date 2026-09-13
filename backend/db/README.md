@@ -23,10 +23,25 @@ export GATEWAY_APP_PASSWORD='...'
 ./run_migration.sh
 ```
 
+## 검증
+
+빈 DB 적용과 멱등성은 통합 테스트 스택으로 확인합니다.
+
+```bash
+cd ..                        # backend/
+./scripts/test-stack.sh up       # 기동 + init → alembic → grants
+./scripts/test-stack.sh migrate  # 재적용 (멱등성 확인)
+./scripts/test-stack.sh test tests/integration/test_schema_and_grants.py
+```
+
 ## 규칙
 
 - **Alembic 의 단일 소유자는 `backend/` 입니다.** gateway 는 같은 스키마를 읽되 정의하지 않습니다.
 - 마이그레이션은 DDL 권한을 가진 역할로 실행합니다. 런타임 역할(`backend_app`)에는 DDL 권한이 없습니다.
 - `init/*.sql` 은 멱등해야 합니다(`IF NOT EXISTS`).
+- **psql 변수(`:'name'`)는 dollar-quoted 블록 안에서 치환되지 않습니다.** `DO $$ ... $$` 안에
+  변수를 쓰면 문법 오류로 끝납니다. 변수를 블록 밖에 두고 `\gexec` 로 실행하세요
+  (`init/02_create_roles.sql` 참고). 이 함정은 스크립트를 실제로 돌려보기 전까지 드러나지
+  않습니다 — `--sql` 렌더링으로는 잡히지 않습니다.
 - autogenerate 결과를 그대로 커밋하지 않습니다. 생성된 리비전은 사람이 읽고 다듬습니다.
 - 마이그레이션은 앞으로만 갑니다. downgrade 는 작성하되 운영에서 실행하지 않습니다.

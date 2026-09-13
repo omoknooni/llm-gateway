@@ -379,6 +379,11 @@ alias이기 때문입니다. alias 변경은 지원하지 않고 새 alias 생�
 
 집계 작업은 backend의 주기 job이 소유합니다(원천 이벤트는 읽기만).
 
+`user_id`는 PK 구성원이라 NULL을 담을 수 없는데 원천(`usage_events.user_id`)은 nullable입니다.
+`TEAM` 소유 VK 호출은 예약 UUID `00000000-0000-0000-0000-000000000000`으로 모으고, 조회에서는
+`(팀 공용 키)` 라벨을 답니다([10](10-usage-aggregation.md), 07 미결정 #5 종결).
+이 컬럼에는 FK가 없으므로 대응하는 사용자 행이 없어도 됩니다.
+
 ## audit schema
 
 ### audit.audit_logs

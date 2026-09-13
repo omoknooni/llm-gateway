@@ -45,7 +45,8 @@ MIGRATION_DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/ll
 # 앱 실행
 PYTHONPATH=src .venv/bin/uvicorn app.main:app --reload --port 8080
 
-# 주기 작업 (별도 프로세스. 만료 키 정리, 캐시 재시도, 단가 누락 점검)
+# 주기 작업 (별도 프로세스. 만료 키 정리, 캐시 재시도, 단가 누락 점검,
+#            예산 임계 감지, 예산 카운터 정합성 검증, 사용량 일·월 집계)
 PYTHONPATH=src .venv/bin/python -m app.jobs.main
 ```
 
@@ -54,6 +55,22 @@ PYTHONPATH=src .venv/bin/python -m app.jobs.main
 
 > 루트 `docker-compose.yml`에 backend 서비스를 추가하는 작업은 공용 파일 변경이므로
 > `main` 브랜치에서 처리합니다(AGENTS.md 브랜치 규율).
+
+## 통합 테스트
+
+단위 테스트는 의존 스택 없이 돕니다. 통합 테스트는 **PostgreSQL 과 Redis 가 필요하고,
+없으면 자동으로 건너뜁니다** — `pytest` 는 어느 환경에서든 초록색입니다.
+
+```bash
+./scripts/test-stack.sh up      # 테스트 전용 스택 기동 + 스키마 적용
+./scripts/test-stack.sh test    # 전체 테스트 (단위 + 통합)
+./scripts/test-stack.sh down    # 제거
+```
+
+- 스택은 `docker-compose.test.yml` 이며 **루트 개발 스택과 별개**입니다(포트 55432 / 56379).
+  데이터는 tmpfs 라 `down` 하면 함께 사라지고, 개발용 DB 를 건드리지 않습니다.
+- SQLite 로 대체하지 않습니다. partial unique index, advisory lock, `percentile_disc`,
+  `citext`, 배열 컬럼이 전부 PostgreSQL 고유 기능입니다(07 문서).
 
 ## 검사
 

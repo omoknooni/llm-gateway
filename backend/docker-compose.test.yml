@@ -1,0 +1,60 @@
+# 통합 테스트용 의존 스택.
+#
+# 루트 `docker-compose.yml`(로컬 개발용)과 **별개**입니다. 이유는 세 가지입니다.
+#
+#   1. 통합 테스트는 스키마를 지우고 다시 만듭니다. 개발용 DB 를 쓰면 작업하던 데이터가 날아갑니다.
+#   2. 포트를 다르게 둬야 개발 스택을 띄운 채로 테스트를 돌릴 수 있습니다.
+#   3. 루트 compose 는 `main` 소유 공용 파일이라 backend 사정으로 바꾸지 않습니다(AGENTS.md).
+#
+# 데이터는 볼륨이 아니라 tmpfs 에 둡니다. 테스트는 매번 빈 DB 에서 시작해야 하고,
+# 디스크에 남으면 "지난번 테스트가 남긴 행" 때문에 통과하는 테스트가 생깁니다.
+#
+#   ./scripts/test-stack.sh up      스택 기동 + 스키마 적용
+#   ./scripts/test-stack.sh test    통합 테스트 실행
+#   ./scripts/test-stack.sh down    스택 제거
+name: llm-gateway-backend-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: llm_gateway_test
+      # 테스트 DB 라 내구성이 필요 없습니다. fsync 를 끄면 마이그레이션이 눈에 띄게 빨라집니다.
+      POSTGRES_INITDB_ARGS: "--nosync"
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+      # 동시성 테스트가 잠금 대기에 걸리면 영원히 기다리지 않고 실패하게 합니다.
+      - -c
+      - lock_timeout=10s
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      # init/grants SQL 을 컨테이너 안에서 psql -f 로 읽습니다(로컬에 psql 이 없어도 됩니다).
+      - ./db:/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d llm_gateway_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # 영속화를 끕니다. 재시작이 옛 카운터를 되살리면 테스트가 서로에게 영향을 줍니다.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

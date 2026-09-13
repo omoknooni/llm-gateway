@@ -19,16 +19,36 @@ frontend(Phase 3)가 병렬로 진행할 수 있습니다.
 |---|---|
 | M0 계약 고정 | 완료 — [08-shared-contracts.md](08-shared-contracts.md) (gateway 합의 대기) |
 | M1 프로젝트 골격 | 완료 |
-| M2 스키마·감사·캐시 | 완료 (실 DB 적용 검증은 미완 — 아래 참조) |
+| M2 스키마·감사·캐시 | 완료 (실 DB 적용·권한 경계 검증 완료) |
 | M3 인증·인가, 팀/사용자 | 완료 |
 | M4 Virtual Key | 완료 |
 | M5 모델 카탈로그 | 완료 |
-| M6~M8 | 미착수 |
+| M6 예산 | 완료 (리뷰 P1 3건 반영 + 통합 테스트 — [review/M6_budget_management/response.md](review/M6_budget_management/response.md)) |
+| M7 사용량 집계·조회 | 완료 (리뷰 P1·P2 4건 반영 — [review/M7_usage_aggregation/response.md](review/M7_usage_aggregation/response.md)) |
+| M8 rate limit | 완료 (리뷰 3건 반영 — [review/M8_rate_limit/response.md](review/M8_rate_limit/response.md)). `/rate-limits/usage` 는 gateway 카운터 규약 확정 대기 |
 | gateway 요청 스키마 변경 (S1~S4) | **완료** — 마이그레이션 `0004`·`0005`, ORM·API·캐시 키 반영 ([09](09-gateway-contract-response.md)) |
 
-**미검증 항목**: 개발 환경에 PostgreSQL 이 없어 마이그레이션 실 적용과 통합 테스트를 아직
-돌리지 못했습니다. 현재 검증 범위는 오프라인 SQL 렌더링(`alembic upgrade head --sql`)과
-단위 테스트입니다. DB 를 띄운 뒤 `db/run_migration.sh` 적용과 통합 테스트가 남아 있습니다.
+**검증 상태**: `backend/docker-compose.test.yml` + `scripts/test-stack.sh` 로 PostgreSQL·Redis 를
+띄우고 통합 테스트를 돌립니다(`backend/README.md`). 스택이 없으면 통합 테스트는 건너뛰므로
+`pytest` 는 어느 환경에서든 통과합니다.
+
+해소된 것:
+
+- 마이그레이션이 빈 DB 에 적용되고 재적용이 멱등합니다.
+- `gateway_app` 역할의 `audit` 스키마 접근이 거부되고, 컬럼 단위 GRANT 까지 의도대로 걸립니다.
+- 리뷰가 요청한 동시성·금액 정밀도·재시드 원자성 테스트가 들어왔습니다.
+- 집계 job 이 실제 데이터에서 UTC 버킷·NULL 사용자 매핑·멱등성을 지킵니다.
+
+이 과정에서 `init/02_create_roles.sql` 이 **한 번도 동작한 적이 없었다**는 것이 드러났습니다.
+psql 변수가 dollar-quoted 블록 안에서 치환되지 않아 문법 오류로 끝났습니다. 오프라인 SQL
+렌더링으로는 잡히지 않는 종류의 결함입니다([db/README.md](../db/README.md)).
+
+**남은 것**:
+
+- gateway 가 usage 이벤트를 쓰기 시작해야 M7 집계를 **실데이터로** 검증할 수 있습니다.
+- 라우터 계층(HTTP) 통합 테스트가 없습니다. 현재 통합 테스트는 서비스·job·스키마 층입니다.
+- 테스트 전략의 "계약" 층(**OpenAPI 스냅샷 비교**)이 아직 비어 있습니다. 응답·파라미터
+  스키마 변경이 리뷰 diff 에 드러나지 않습니다.
 
 ## Milestones
 
@@ -106,6 +126,14 @@ gateway 브랜치와 합의해야 하는 항목입니다. 이게 끝나야 M2 �
 - 소진값 재시드(ADMIN 전용)
 - Redis/DB 정합성 검증 job
 
+완료. 구현하면서 확정한 것은 [05](05-budget-management.md)의 "구현 시 확정한 것 (M6)" 표에
+있습니다. 마이그레이션은 추가하지 않았습니다 — `budget_configs`·`budget_usages` 는 `0001`
+baseline 에 이미 있습니다.
+
+`GET /budgets/team/{id}/usage` 의 멤버·모델 breakdown 은 `usage.monthly_usage_aggregates` 를
+읽습니다. 그 테이블을 채우는 집계 job 은 M7 에서 들어왔습니다. 총 소진액은 Redis 카운터 /
+`budget_usages` 에서 오므로 집계와 독립적으로 동작합니다.
+
 ### M7 — 사용량 집계와 조회
 
 - `usage.usage_events` → 일·월 집계 job
@@ -113,7 +141,11 @@ gateway 브랜치와 합의해야 하는 항목입니다. 이게 끝나야 M2 �
 - 대시보드·리더보드용 조회 API
   ([leaderboard-and-dashboard.md](../../docs/leaderboard-and-dashboard.md)의 지표 정의를 따름)
 
-M7은 gateway가 이벤트를 쓰기 시작해야 검증됩니다. 그 전에는 시드 데이터로 개발합니다.
+완료. 집계 규칙·지표 정의·조회 API는 [10](10-usage-aggregation.md)에 있습니다.
+마이그레이션은 추가하지 않았습니다 — 집계 테이블은 `0002` 에 이미 있습니다.
+
+M7은 gateway가 이벤트를 쓰기 시작해야 **실데이터로** 검증됩니다. 현재 검증 범위는 규칙
+단위 테스트와 오프라인 SQL 렌더링입니다.
 
 ### M8 — Rate limit (06)
 
@@ -121,7 +153,16 @@ M7은 gateway가 이벤트를 쓰기 시작해야 검증됩니다. 그 전에는
 - `effective` 해석 API, 트리 조회
 - 실시간 사용률 조회(gateway 카운터 규약 확정 후)
 
+완료. 구현하면서 확정한 것은 [06](06-rate-limit-management.md)의 "구현 시 확정한 것 (M8)"
+표에 있습니다. 마이그레이션은 추가하지 않았습니다 — `rate_limit_configs` 는 `0001` baseline 에
+이미 있습니다.
+
+**`GET /rate-limits/usage` 만 값을 채우지 못합니다.** gateway 문서가 집행 카운터 키의 최종
+형태를 Phase 4 미확정으로 두고 있어(윈도 표기, cluster mode 해시태그) 키를 만들 수 없습니다.
+엔드포인트는 계약대로 `available: false` 를 돌려주므로 화면은 지금 붙일 수 있습니다.
+
 M6~M8은 저장소 전체 계획의 Phase 4에 해당하며, gateway·frontend와 병행합니다.
+**backend 몫의 Phase 1·4 마일스톤은 여기서 끝납니다.**
 
 ## Dependency Order
 
@@ -153,10 +194,19 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 
 - 허용 모델 3층 해석에서 **"행 0개"의 의미가 층마다 다른 것** (04)
 - rate limit **한도 종류별 폴백** 과 GLOBAL 별도 축 (06)
-- 예산 **UTC 월 경계** — 특히 KST 기준 월초/월말 (05)
+- rate limit 에는 **합계 불변식이 없는 것** — 각 하위를 상위와 개별 비교 (06)
+- 조회의 **모델 차원 격리** — 모델 미지정 조회에 모델 전용 설정이 섞이지 않는 것 (06)
+- `effective` 의 사용자 축은 **키가 말하는 소유자**로만 정해지는 것 (06)
+- 예산 **UTC 월 경계** — 특히 KST 기준 월초/월말 (05). 사용량 일 버킷도 같은 기준 (10)
+- 집계의 **멱등성**과 `user_id` NULL → 예약 UUID 매핑 (10)
+- 사용량 조회의 **인가 범위 축소** — 다른 팀·다른 사람은 빈 결과가 아니라 403 (00·10)
+- 기간 필터가 **양끝 포함**이고 월 단위 추이도 그 범위를 벗어나지 않는 것 (10)
+- lookback 밖 원천이 backfill 로 들어오는 것 (10)
 - 팀 이동 시 **캐시 무효화 대상 VK 집합** (02·03)
 - 트랜잭션 커밋 **이후** 캐시 삭제 순서 (00)
 - 마지막 ADMIN 보호, 배분 합계 초과 거절 (02·05)
+- **동시 갱신에서도** 배분 합계가 팀 한도를 넘지 않는 것 — 팀 단위 advisory lock (05)
+- 금액 입력이 `numeric(14,4)` 표현 범위를 벗어나면 거절되는 것 (05)
 - 폐기·만료 키의 인증 컨텍스트 캐시가 남지 않는 것 (03)
 
 통합 테스트는 SQLite로 대체하지 않습니다. partial unique index, `EXCLUDE` 제약, enum, `citext`,
@@ -180,8 +230,8 @@ M4는 M5의 허용 모델 검증을 참조하지만, VK 허용 모델 축소 기
 | ~~2~~ | ~~사용량 기록 경로~~ → **종결**: gateway 직접 INSERT + 메모리 스풀. ADR 승격 대상 | 01, 05, M7 | [09](09-gateway-contract-response.md) |
 | 3 | `usage.usage_events`·`usage.auth_events` 파티셔닝 도입 시점과 보존 기간 | 01, M7 | 실사용 볼륨이 보인 뒤. 두 테이블을 한 결정으로 묶음 |
 | 4 | 부서(department) 계층 도입 여부 | 01, 02, 05 | 예산 롤업 요구가 생기면 |
-| 5 | `TEAM` 소유 VK 사용량의 사용자 축 표현 | 03, 05, M7 | M7 대시보드 설계 시 |
-| 10 | `client`의 집계 축 편입 — `usage.daily_client_usage` 신설 여부 | 01, M7 | M7. 주 집계 PK는 건드리지 않기로 확정 |
+| ~~5~~ | ~~`TEAM` 소유 VK 사용량의 사용자 축 표현~~ → **종결**: 집계에서 예약 UUID + `(팀 공용 키)` 라벨 | 03, 05, M7 | [10](10-usage-aggregation.md) |
+| ~~10~~ | ~~`client`의 집계 축 편입 — `usage.daily_client_usage` 신설 여부~~ → **종결**: 신설하지 않음 | 01, M7 | [10](10-usage-aggregation.md) |
 | 11 | 스풀 드롭 기록 `usage.ingest_gaps`의 최종 형태 | 01, Phase 4 | Phase 4. Prometheus 직접 조회는 배제 확정 |
 | 6 | 과거 단가 소급 변경 시 재집계 정책 | 04, M7 | 단가 조정이 실제로 발생할 때 |
 | 7 | 429 거절 이력의 영속화 여부 | 06 | gateway 메트릭 설계와 함께 |
